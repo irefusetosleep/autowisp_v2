@@ -153,7 +153,6 @@ imports:
  &#8226;   <a href="#genericpath">genericpath</a>
  &#8226;   <a href="#heapq">heapq</a>
  &#8226;   <a href="#io">io</a>
- &#8226;   <a href="#keyboard">keyboard</a>
  &#8226;   <a href="#keyword">keyword</a>
  &#8226;   <a href="#linecache">linecache</a>
  &#8226;   <a href="#locale">locale</a>
@@ -162,6 +161,7 @@ imports:
  &#8226;   <a href="#operator">operator</a>
  &#8226;   <a href="#os">os</a>
  &#8226;   <a href="#pathlib">pathlib</a>
+ &#8226;   <a href="#platform">platform</a>
  &#8226;   <a href="#posixpath">posixpath</a>
  &#8226;   <a href="#pyautogui">pyautogui</a>
  &#8226;   <a href="#pydirectinput">pydirectinput</a>
@@ -186,6 +186,8 @@ imports:
  &#8226;   <a href="#threading">threading</a>
  &#8226;   <a href="#time">time</a>
  &#8226;   <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
+ &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
  &#8226;   <a href="#traceback">traceback</a>
  &#8226;   <a href="#types">types</a>
  &#8226;   <a href="#warnings">warnings</a>
@@ -558,8 +560,7 @@ imported by:
   <a target="code" href="" type="text/plain"><tt>AppKit</tt></a>
 <span class="moduletype">MissingModule</span>  <div class="import">
 imported by:
-    <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#pyautogui._pyautogui_osx">pyautogui._pyautogui_osx</a>
+    <a href="#pyautogui._pyautogui_osx">pyautogui._pyautogui_osx</a>
  &#8226;   <a href="#pymonctl._pymonctl_macos">pymonctl._pymonctl_macos</a>
  &#8226;   <a href="#pyperclip">pyperclip</a>
  &#8226;   <a href="#pywinbox._pywinbox_macos">pywinbox._pywinbox_macos</a>
@@ -3087,24 +3088,10 @@ imported by:
   <a target="code" href="" type="text/plain"><tt>Quartz</tt></a>
 <span class="moduletype">MissingModule</span>  <div class="import">
 imported by:
-    <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#pyautogui._pyautogui_osx">pyautogui._pyautogui_osx</a>
+    <a href="#pyautogui._pyautogui_osx">pyautogui._pyautogui_osx</a>
  &#8226;   <a href="#pygetwindow._pygetwindow_macos">pygetwindow._pygetwindow_macos</a>
  &#8226;   <a href="#pymonctl._pymonctl_macos">pymonctl._pymonctl_macos</a>
  &#8226;   <a href="#pywinctl._pywinctl_macos">pywinctl._pywinctl_macos</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="Queue"></a>
-  <a target="code" href="" type="text/plain"><tt>Queue</tt></a>
-<span class="moduletype">MissingModule</span>  <div class="import">
-imported by:
-    <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._generic">keyboard._generic</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
 
   </div>
 
@@ -3237,9 +3224,6 @@ imported by:
  &#8226;   <a href="#importlib.metadata">importlib.metadata</a>
  &#8226;   <a href="#importlib.metadata._meta">importlib.metadata._meta</a>
  &#8226;   <a href="#importlib.resources.readers">importlib.resources.readers</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._canonical_names">keyboard._canonical_names</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
  &#8226;   <a href="#numpy._typing">numpy._typing</a>
  &#8226;   <a href="#numpy._typing._array_like">numpy._typing._array_like</a>
  &#8226;   <a href="#numpy._typing._nested_sequence">numpy._typing._nested_sequence</a>
@@ -5467,8 +5451,6 @@ imported by:
   <tt>atexit</tt> <span class="moduletype"><i>(builtin module)</i></span>  <div class="import">
 imported by:
     <a href="#PIL.Image">PIL.Image</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#multiprocessing.forkserver">multiprocessing.forkserver</a>
  &#8226;   <a href="#multiprocessing.popen_fork">multiprocessing.popen_fork</a>
@@ -6160,10 +6142,6 @@ imported by:
  &#8226;   <a href="#importlib.metadata._collections">importlib.metadata._collections</a>
  &#8226;   <a href="#importlib.resources.readers">importlib.resources.readers</a>
  &#8226;   <a href="#inspect">inspect</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#multiprocessing.heap">multiprocessing.heap</a>
  &#8226;   <a href="#multiprocessing.pool">multiprocessing.pool</a>
@@ -6560,8 +6538,6 @@ imported by:
  &#8226;   <a href="#ctypes.macholib">ctypes.macholib</a>
  &#8226;   <a href="#ctypes.util">ctypes.util</a>
  &#8226;   <a href="#ctypes.wintypes">ctypes.wintypes</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
  &#8226;   <a href="#mouseinfo">mouseinfo</a>
  &#8226;   <a href="#multiprocessing.sharedctypes">multiprocessing.sharedctypes</a>
  &#8226;   <a href="#numpy._core._dtype_ctypes">numpy._core._dtype_ctypes</a>
@@ -6715,7 +6691,6 @@ imports:
 imported by:
     <a href="#_ios_support">_ios_support</a>
  &#8226;   <a href="#ctypes">ctypes</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
  &#8226;   <a href="#mouseinfo">mouseinfo</a>
  &#8226;   <a href="#pymonctl._pymonctl_macos">pymonctl._pymonctl_macos</a>
 
@@ -6734,7 +6709,6 @@ imports:
   <div class="import">
 imported by:
     <a href="#ctypes">ctypes</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
  &#8226;   <a href="#pyautogui._pyautogui_win">pyautogui._pyautogui_win</a>
  &#8226;   <a href="#pygetwindow._pygetwindow_win">pygetwindow._pygetwindow_win</a>
  &#8226;   <a href="#pymonctl._pymonctl_win">pymonctl._pymonctl_win</a>
@@ -10299,8 +10273,7 @@ imported by:
   <a target="code" href="" type="text/plain"><tt>fcntl</tt></a>
 <span class="moduletype">MissingModule</span>  <div class="import">
 imported by:
-    <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#subprocess">subprocess</a>
+    <a href="#subprocess">subprocess</a>
 
   </div>
 
@@ -10446,7 +10419,6 @@ imported by:
  &#8226;   <a href="#importlib.resources._common">importlib.resources._common</a>
  &#8226;   <a href="#inspect">inspect</a>
  &#8226;   <a href="#ipaddress">ipaddress</a>
- &#8226;   <a href="#keyboard._generic">keyboard._generic</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#multiprocessing.reduction">multiprocessing.reduction</a>
@@ -10635,8 +10607,7 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#pathlib._abc">pathlib._abc</a>
+    <a href="#pathlib._abc">pathlib._abc</a>
  &#8226;   <a href="#pathlib._local">pathlib._local</a>
  &#8226;   <a href="#pdb">pdb</a>
  &#8226;   <a href="#win32com.client.gencache">win32com.client.gencache</a>
@@ -11653,7 +11624,6 @@ imported by:
  &#8226;   <a href="#importlib.resources.abc">importlib.resources.abc</a>
  &#8226;   <a href="#importlib.resources.readers">importlib.resources.readers</a>
  &#8226;   <a href="#inspect">inspect</a>
- &#8226;   <a href="#keyboard">keyboard</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
  &#8226;   <a href="#multiprocessing.pool">multiprocessing.pool</a>
  &#8226;   <a href="#multiprocessing.process">multiprocessing.process</a>
@@ -11715,7 +11685,6 @@ imported by:
  &#8226;   <a href="#json.decoder">json.decoder</a>
  &#8226;   <a href="#json.encoder">json.encoder</a>
  &#8226;   <a href="#json.scanner">json.scanner</a>
- &#8226;   <a href="#keyboard._keyboard_event">keyboard._keyboard_event</a>
  &#8226;   <a href="#numpy.__config__">numpy.__config__</a>
  &#8226;   <a href="#numpy.testing._private.utils">numpy.testing._private.utils</a>
  &#8226;   <a href="#pywinctl._pywinctl_linux">pywinctl._pywinctl_linux</a>
@@ -11776,215 +11745,6 @@ imports:
 imported by:
     <a href="#json">json</a>
  &#8226;   <a href="#json.decoder">json.decoder</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="keyboard"></a>
-  <a target="code" href="///C:/Users/lewis/AppData/Roaming/Python/Python313/site-packages/keyboard/__init__.py" type="text/plain"><tt>keyboard</tt></a>
-<span class="moduletype">Package</span>  <div class="import">
-imports:
-    <a href="#Queue">Queue</a>
- &#8226;   <a href="#__future__">__future__</a>
- &#8226;   <a href="#collections">collections</a>
- &#8226;   <a href="#itertools">itertools</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._canonical_names">keyboard._canonical_names</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#keyboard._generic">keyboard._generic</a>
- &#8226;   <a href="#keyboard._keyboard_event">keyboard._keyboard_event</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
- &#8226;   <a href="#platform">platform</a>
- &#8226;   <a href="#queue">queue</a>
- &#8226;   <a href="#re">re</a>
- &#8226;   <a href="#threading">threading</a>
- &#8226;   <a href="#time">time</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._canonical_names">keyboard._canonical_names</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#keyboard._generic">keyboard._generic</a>
- &#8226;   <a href="#keyboard._keyboard_event">keyboard._keyboard_event</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
- &#8226;   <a href="#main.py">main.py</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="keyboard._canonical_names"></a>
-  <a target="code" href="///C:/Users/lewis/AppData/Roaming/Python/Python313/site-packages/keyboard/_canonical_names.py" type="text/plain"><tt>keyboard._canonical_names</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#__future__">__future__</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#platform">platform</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#keyboard._keyboard_event">keyboard._keyboard_event</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="keyboard._darwinkeyboard"></a>
-  <a target="code" href="///C:/Users/lewis/AppData/Roaming/Python/Python313/site-packages/keyboard/_darwinkeyboard.py" type="text/plain"><tt>keyboard._darwinkeyboard</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#AppKit">AppKit</a>
- &#8226;   <a href="#Quartz">Quartz</a>
- &#8226;   <a href="#ctypes">ctypes</a>
- &#8226;   <a href="#ctypes.util">ctypes.util</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._canonical_names">keyboard._canonical_names</a>
- &#8226;   <a href="#keyboard._keyboard_event">keyboard._keyboard_event</a>
- &#8226;   <a href="#os">os</a>
- &#8226;   <a href="#threading">threading</a>
- &#8226;   <a href="#time">time</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#keyboard">keyboard</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="keyboard._generic"></a>
-  <a target="code" href="///C:/Users/lewis/AppData/Roaming/Python/Python313/site-packages/keyboard/_generic.py" type="text/plain"><tt>keyboard._generic</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#Queue">Queue</a>
- &#8226;   <a href="#functools">functools</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#queue">queue</a>
- &#8226;   <a href="#threading">threading</a>
- &#8226;   <a href="#traceback">traceback</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#keyboard">keyboard</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="keyboard._keyboard_event"></a>
-  <a target="code" href="///C:/Users/lewis/AppData/Roaming/Python/Python313/site-packages/keyboard/_keyboard_event.py" type="text/plain"><tt>keyboard._keyboard_event</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#json">json</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._canonical_names">keyboard._canonical_names</a>
- &#8226;   <a href="#time">time</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="keyboard._nixcommon"></a>
-  <a target="code" href="///C:/Users/lewis/AppData/Roaming/Python/Python313/site-packages/keyboard/_nixcommon.py" type="text/plain"><tt>keyboard._nixcommon</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#Queue">Queue</a>
- &#8226;   <a href="#atexit">atexit</a>
- &#8226;   <a href="#collections">collections</a>
- &#8226;   <a href="#fcntl">fcntl</a>
- &#8226;   <a href="#glob">glob</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#os">os</a>
- &#8226;   <a href="#queue">queue</a>
- &#8226;   <a href="#re">re</a>
- &#8226;   <a href="#struct">struct</a>
- &#8226;   <a href="#threading">threading</a>
- &#8226;   <a href="#time">time</a>
- &#8226;   <a href="#warnings">warnings</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="keyboard._nixkeyboard"></a>
-  <a target="code" href="///C:/Users/lewis/AppData/Roaming/Python/Python313/site-packages/keyboard/_nixkeyboard.py" type="text/plain"><tt>keyboard._nixkeyboard</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#collections">collections</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._canonical_names">keyboard._canonical_names</a>
- &#8226;   <a href="#keyboard._keyboard_event">keyboard._keyboard_event</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#re">re</a>
- &#8226;   <a href="#struct">struct</a>
- &#8226;   <a href="#subprocess">subprocess</a>
- &#8226;   <a href="#time">time</a>
- &#8226;   <a href="#traceback">traceback</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#keyboard">keyboard</a>
-
-  </div>
-
-</div>
-
-<div class="node">
-  <a name="keyboard._winkeyboard"></a>
-  <a target="code" href="///C:/Users/lewis/AppData/Roaming/Python/Python313/site-packages/keyboard/_winkeyboard.py" type="text/plain"><tt>keyboard._winkeyboard</tt></a>
-<span class="moduletype">SourceModule</span>  <div class="import">
-imports:
-    <a href="#__future__">__future__</a>
- &#8226;   <a href="#atexit">atexit</a>
- &#8226;   <a href="#collections">collections</a>
- &#8226;   <a href="#ctypes">ctypes</a>
- &#8226;   <a href="#ctypes.wintypes">ctypes.wintypes</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._canonical_names">keyboard._canonical_names</a>
- &#8226;   <a href="#keyboard._keyboard_event">keyboard._keyboard_event</a>
- &#8226;   <a href="#pprint">pprint</a>
- &#8226;   <a href="#re">re</a>
- &#8226;   <a href="#threading">threading</a>
- &#8226;   <a href="#traceback">traceback</a>
-
-  </div>
-  <div class="import">
-imported by:
-    <a href="#keyboard">keyboard</a>
 
   </div>
 
@@ -20032,8 +19792,6 @@ imported by:
  &#8226;   <a href="#importlib.resources._common">importlib.resources._common</a>
  &#8226;   <a href="#importlib.resources.abc">importlib.resources.abc</a>
  &#8226;   <a href="#inspect">inspect</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
  &#8226;   <a href="#linecache">linecache</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#logging">logging</a>
@@ -20373,8 +20131,7 @@ imports:
   <div class="import">
 imported by:
     <a href="#cv2">cv2</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._canonical_names">keyboard._canonical_names</a>
+ &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#mouseinfo">mouseinfo</a>
  &#8226;   <a href="#numpy.f2py.crackfortran">numpy.f2py.crackfortran</a>
  &#8226;   <a href="#numpy.lib._utils_impl">numpy.lib._utils_impl</a>
@@ -20454,8 +20211,7 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
- &#8226;   <a href="#numpy.f2py.auxfuncs">numpy.f2py.auxfuncs</a>
+    <a href="#numpy.f2py.auxfuncs">numpy.f2py.auxfuncs</a>
  &#8226;   <a href="#numpy.f2py.f2py2e">numpy.f2py.f2py2e</a>
  &#8226;   <a href="#numpy.lib._utils_impl">numpy.lib._utils_impl</a>
  &#8226;   <a href="#numpy.testing._private.utils">numpy.testing._private.utils</a>
@@ -21655,9 +21411,6 @@ imports:
 imported by:
     <a href="#concurrent.futures.process">concurrent.futures.process</a>
  &#8226;   <a href="#concurrent.futures.thread">concurrent.futures.thread</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._generic">keyboard._generic</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
  &#8226;   <a href="#multiprocessing.dummy">multiprocessing.dummy</a>
  &#8226;   <a href="#multiprocessing.dummy.connection">multiprocessing.dummy.connection</a>
  &#8226;   <a href="#multiprocessing.managers">multiprocessing.managers</a>
@@ -21797,10 +21550,6 @@ imported by:
  &#8226;   <a href="#json.decoder">json.decoder</a>
  &#8226;   <a href="#json.encoder">json.encoder</a>
  &#8226;   <a href="#json.scanner">json.scanner</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>
@@ -22497,8 +22246,6 @@ imported by:
  &#8226;   <a href="#ctypes.util">ctypes.util</a>
  &#8226;   <a href="#gettext">gettext</a>
  &#8226;   <a href="#gzip">gzip</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
  &#8226;   <a href="#multiprocessing.forkserver">multiprocessing.forkserver</a>
  &#8226;   <a href="#multiprocessing.shared_memory">multiprocessing.shared_memory</a>
@@ -22561,7 +22308,6 @@ imported by:
  &#8226;   <a href="#ctypes._aix">ctypes._aix</a>
  &#8226;   <a href="#ctypes.util">ctypes.util</a>
  &#8226;   <a href="#http.server">http.server</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
  &#8226;   <a href="#mouseinfo">mouseinfo</a>
  &#8226;   <a href="#multiprocessing.popen_spawn_win32">multiprocessing.popen_spawn_win32</a>
  &#8226;   <a href="#multiprocessing.util">multiprocessing.util</a>
@@ -22989,11 +22735,6 @@ imported by:
  &#8226;   <a href="#concurrent.futures.thread">concurrent.futures.thread</a>
  &#8226;   <a href="#http.cookiejar">http.cookiejar</a>
  &#8226;   <a href="#importlib.util">importlib.util</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#keyboard._generic">keyboard._generic</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#multiprocessing.context">multiprocessing.context</a>
@@ -23066,11 +22807,6 @@ imported by:
  &#8226;   <a href="#gzip">gzip</a>
  &#8226;   <a href="#http.cookiejar">http.cookiejar</a>
  &#8226;   <a href="#http.server">http.server</a>
- &#8226;   <a href="#keyboard">keyboard</a>
- &#8226;   <a href="#keyboard._darwinkeyboard">keyboard._darwinkeyboard</a>
- &#8226;   <a href="#keyboard._keyboard_event">keyboard._keyboard_event</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#multiprocessing.connection">multiprocessing.connection</a>
@@ -23123,6 +22859,7 @@ imports:
  &#8226;   <a href="#re">re</a>
  &#8226;   <a href="#sys">sys</a>
  &#8226;   <a href="#tkinter.constants">tkinter.constants</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
  &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
  &#8226;   <a href="#traceback">traceback</a>
  &#8226;   <a href="#types">types</a>
@@ -23133,8 +22870,26 @@ imported by:
     <a href="#main.py">main.py</a>
  &#8226;   <a href="#mouseinfo">mouseinfo</a>
  &#8226;   <a href="#pymsgbox">pymsgbox</a>
+ &#8226;   <a href="#tkinter.commondialog">tkinter.commondialog</a>
  &#8226;   <a href="#tkinter.constants">tkinter.constants</a>
+ &#8226;   <a href="#tkinter.messagebox">tkinter.messagebox</a>
  &#8226;   <a href="#tkinter.ttk">tkinter.ttk</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="tkinter.commondialog"></a>
+  <a target="code" href="///C:/Python313/Lib/tkinter/commondialog.py" type="text/plain"><tt>tkinter.commondialog</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#tkinter">tkinter</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#tkinter.messagebox">tkinter.messagebox</a>
 
   </div>
 
@@ -23157,6 +22912,24 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="tkinter.messagebox"></a>
+  <a target="code" href="///C:/Python313/Lib/tkinter/messagebox.py" type="text/plain"><tt>tkinter.messagebox</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#tkinter">tkinter</a>
+ &#8226;   <a href="#tkinter.commondialog">tkinter.commondialog</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#tkinter">tkinter</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="tkinter.ttk"></a>
   <a target="code" href="///C:/Python313/Lib/tkinter/ttk.py" type="text/plain"><tt>tkinter.ttk</tt></a>
 <span class="moduletype">SourceModule</span>  <div class="import">
@@ -23166,7 +22939,8 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#mouseinfo">mouseinfo</a>
+    <a href="#main.py">main.py</a>
+ &#8226;   <a href="#mouseinfo">mouseinfo</a>
  &#8226;   <a href="#tkinter">tkinter</a>
 
   </div>
@@ -23244,9 +23018,6 @@ imported by:
  &#8226;   <a href="#concurrent.futures.process">concurrent.futures.process</a>
  &#8226;   <a href="#doctest">doctest</a>
  &#8226;   <a href="#http.cookiejar">http.cookiejar</a>
- &#8226;   <a href="#keyboard._generic">keyboard._generic</a>
- &#8226;   <a href="#keyboard._nixkeyboard">keyboard._nixkeyboard</a>
- &#8226;   <a href="#keyboard._winkeyboard">keyboard._winkeyboard</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>
  &#8226;   <a href="#multiprocessing.managers">multiprocessing.managers</a>
@@ -24066,7 +23837,6 @@ imported by:
  &#8226;   <a href="#importlib.resources._common">importlib.resources._common</a>
  &#8226;   <a href="#importlib.resources._functional">importlib.resources._functional</a>
  &#8226;   <a href="#importlib.resources.readers">importlib.resources.readers</a>
- &#8226;   <a href="#keyboard._nixcommon">keyboard._nixcommon</a>
  &#8226;   <a href="#locale">locale</a>
  &#8226;   <a href="#logging">logging</a>
  &#8226;   <a href="#main.py">main.py</a>

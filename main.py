@@ -1,71 +1,55 @@
+import os
+import sys
 import cv2 as cv
 import pyautogui
 import numpy as np
-import pydirectinput as pd
 from time import sleep
-import pywinctl
 from pathlib import Path
+import pywinctl
+import platform
+import configparser
 import threading
 import tkinter as tk
-import configparser
-import keyboard
-import sys, os
+from tkinter import ttk, messagebox
 
-# ------------------------
-# Resource path helper (PyInstaller)
-# ------------------------
-def resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS # this error is fine
-    except AttributeError:
-        base_path = os.path.abspath(".")
-    return Path(os.path.join(base_path, relative_path))
+# --- Handle file paths in both source and PyInstaller EXE/app ---
+def resource_path(relative_path: str) -> Path:
+    """Get absolute path to resource (works for dev and PyInstaller)."""
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / relative_path  # Inside PyInstaller bundle
+    return Path(os.path.abspath(".")) / relative_path
 
-# ------------------------
-# Settings Path helper
-# ------------------------
+# --- Cross-platform key input handling ---
+if platform.system() == "Windows":
+    import pydirectinput as pd
+else:
+    pd = pyautogui  # fallback for macOS/Linux
 
+# --- Config handling (persistent settings) ---
 def get_settings_path():
-    app_dir = Path(os.getenv("APPDATA") or Path.home() / ".config") / "autowisp_v2"
+    app_dir = Path(os.getenv('APPDATA') or Path.home() / ".config") / "CinderWispMacro"
     app_dir.mkdir(parents=True, exist_ok=True)
     return app_dir / "settings.ini"
 
-# ------------------------
-# Config
-# ------------------------
-letter_folder = resource_path("Original")
-template_folder = resource_path("Letters")
-settings_file = get_settings_path()
+config = configparser.ConfigParser()
+settings_path = get_settings_path()
 
-binarize_thresh = 140
-delay = 0
-pd.PAUSE = 0.05
-running = False
-toggle_key = "f2"
-hotkey_handler = None
-
-# ------------------------
-# Save / Load window state
-# ------------------------
-def load_window_settings():
-    config = configparser.ConfigParser()
-    if settings_file.exists():
-        config.read(settings_file)
-        if "Window" in config:
-            x = config.getint("Window", "x", fallback=100)
-            y = config.getint("Window", "y", fallback=100)
-            w = config.getint("Window", "w", fallback=400)
-            h = config.getint("Window", "h", fallback=300)
-            k = config.get("Window", "keybind", fallback="f2")
-            return x, y, w, h, k
-    return 100, 100, 400, 300, "f2"
-
-def save_window_settings(x, y, w, h, keybind):
-    config = configparser.ConfigParser()
-    config["Window"] = {"x": x, "y": y, "w": w, "h": h, "keybind": keybind}
-    with open(settings_file, "w") as f:
+if settings_path.exists():
+    config.read(settings_path)
+else:
+    config["SETTINGS"] = {"keybind": "F8"}
+    with open(settings_path, "w") as f:
         config.write(f)
 
+# --- Global vars ---
+letter_folder = resource_path("Original")
+template_folder = resource_path("Letters")
+binarize_thresh = 140
+delay = 0
+running = False
+pd.PAUSE = 0.05
+
+# --- Core functions ---
 def get_window():
     window = pywinctl.getActiveWindow()
     return window.title if window else "No window"
@@ -73,16 +57,12 @@ def get_window():
 def split_into_4(img):
     h, w = img.shape[:2]
     slice_w = w // 4
-    return [
-        img[:, 0:slice_w],
-        img[:, slice_w:2*slice_w],
-        img[:, 2*slice_w:3*slice_w],
-        img[:, 3*slice_w:w],
-    ]
+    return [img[:, i * slice_w:(i + 1) * slice_w] for i in range(4)]
 
 def get_letters(screenshot):
     found_letters = []
     templates = list(template_folder.glob("*.[jp][pn]g"))
+
     quadrants = split_into_4(screenshot)
     for screenshot in quadrants:
         matches = {}
@@ -90,15 +70,18 @@ def get_letters(screenshot):
             template = cv.imread(str(template_path), cv.IMREAD_GRAYSCALE)
             if template is None:
                 continue
+
             match_result = cv.matchTemplate(screenshot, template, cv.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv.minMaxLoc(match_result)
-            matches[str(template_path.stem.replace("_purple", "").lower())] = max_val
+            matches[template_path.stem.replace("_purple", "").lower()] = max_val
+
         if matches:
             best_match = max(matches, key=matches.get)
             confidence = matches[best_match]
             if confidence < 0.5:
-                return found_letters
+                return []
             found_letters.append(best_match)
+
     return found_letters
 
 def screenshot():
@@ -107,125 +90,87 @@ def screenshot():
     left = int(screen_width * 0.44)
     width = int(screen_width * 0.16)
     height = screen_height // 6
+
     ss = pyautogui.screenshot(region=(left, top, width, height))
     ss = cv.cvtColor(np.array(ss), cv.COLOR_RGB2BGR)
     ss = cv.cvtColor(ss, cv.COLOR_BGR2GRAY)
     _, ss = cv.threshold(ss, binarize_thresh, 255, cv.THRESH_BINARY)
     return ss
 
-# ------------------------
-# Macro logic
-# ------------------------
-def run_macro():
+def macro_loop():
     global running
     while running:
         window = get_window()
         if "roblox" not in window.lower():
             sleep(0.1)
             continue
+
         ss = screenshot()
         letters = get_letters(ss)
-        if not letters:
+        if len(letters) == 0:
             sleep(0.1)
             continue
         for letter in letters:
-            if not running:
-                break
             pd.press(letter)
-        sleep(0.05)
+            sleep(delay)
+    print("Macro stopped.")
 
+# --- GUI ---
 def toggle_macro():
     global running
+    running = not running
     if running:
-        running = False
+        start_button.config(text="Stop", bg="red", activebackground="red")
+        threading.Thread(target=macro_loop, daemon=True).start()
     else:
-        running = True
-        threading.Thread(target=run_macro, daemon=True).start()
+        start_button.config(text="Start", bg="green", activebackground="green")
 
-# ------------------------
-# GUI
-# ------------------------
-x, y, w, h, saved_key = load_window_settings()
-toggle_key = saved_key
+def change_keybind():
+    def on_key_press(event):
+        new_key = event.keysym
+        config["SETTINGS"]["keybind"] = new_key
+        with open(settings_path, "w") as f:
+            config.write(f)
+        keybind_label.config(text=f"Current Keybind: {new_key}")
+        bind_window.destroy()
 
+    bind_window = tk.Toplevel(root)
+    bind_window.title("Set Keybind")
+    bind_window.geometry("300x150")
+    bind_window.configure(bg="#1c1c1c")
+    tk.Label(bind_window, text="Press a new key...", fg="orange", bg="#1c1c1c", font=("Segoe UI", 12)).pack(expand=True)
+    bind_window.bind("<Key>", on_key_press)
+
+def on_key_press_global(event):
+    key = config["SETTINGS"]["keybind"]
+    if event.keysym.lower() == key.lower():
+        toggle_macro()
+
+# --- Tkinter Window ---
 root = tk.Tk()
 root.title("Cinder Wisp Macro")
-root.configure(bg="#1e1e1e")
-root.geometry(f"{w}x{h}+{x}+{y}")
-root.iconbitmap(resource_path("icon.ico"))
+root.geometry("350x250")
+root.configure(bg="#1c1c1c")
 
-title_label = tk.Label(root, text="Cinder Wisp Macro", fg="orange", bg="#1e1e1e", font=("Arial", 16, "bold"))
-title_label.pack(pady=10)
+icon_path = resource_path("icon.ico")
+try:
+    root.iconbitmap(icon_path)
+except Exception as e:
+    print("Icon load failed:", e)  # safe fallback for macOS
 
-# Start/Stop button
-start_button = tk.Button(root, text="Start", command=toggle_macro,
-                         fg="white", font=("Arial", 12, "bold"),
-                         width=12, relief=tk.FLAT, bd=0)
+tk.Label(root, text="Cinder Wisp Macro", fg="orange", bg="#1c1c1c", font=("Segoe UI", 18, "bold")).pack(pady=20)
+
+start_button = tk.Button(root, text="Start", command=toggle_macro, bg="green", fg="white",
+                         activebackground="green", relief="flat", width=12, height=2)
 start_button.pack(pady=10)
 
-def update_button_appearance():
-    if running:
-        start_button.configure(bg="red", text="Stop")
-    else:
-        start_button.configure(bg="green", text="Start")
-    root.after(200, update_button_appearance)
+tk.Button(root, text="Change Keybind", command=change_keybind, bg="#333", fg="white",
+          activebackground="#555", relief="flat").pack(pady=10)
 
-# Keybind input
-hotkey_handler = keyboard.add_hotkey(toggle_key, toggle_macro)
+keybind_label = tk.Label(root, text=f"Current Keybind: {config['SETTINGS']['keybind']}",
+                         fg="white", bg="#1c1c1c", font=("Segoe UI", 10))
+keybind_label.pack(pady=5)
 
-def set_new_key():
-    global toggle_key, hotkey_handler
-    new_key = key_entry.get().lower()
-    if not new_key:
-        return
-    # Remove previous hotkey
-    if hotkey_handler:
-        keyboard.remove_hotkey(hotkey_handler)
-    toggle_key = new_key
-    key_label.config(text=f"Current Keybind: {toggle_key.upper()}")
-    # Register new hotkey
-    hotkey_handler = keyboard.add_hotkey(toggle_key, toggle_macro)
-
-key_frame = tk.Frame(root, bg="#1e1e1e")
-key_frame.pack(pady=10)
-
-key_label = tk.Label(key_frame, text=f"Current Keybind: {toggle_key.upper()}", fg="white", bg="#1e1e1e")
-key_label.pack(side=tk.LEFT, padx=5)
-
-key_entry = tk.Entry(key_frame, width=10)
-key_entry.pack(side=tk.LEFT, padx=5)
-
-key_button = tk.Button(key_frame, text="Set Keybind", command=set_new_key)
-key_button.pack(side=tk.LEFT, padx=5)
-
-# Status label
-status_label = tk.Label(root, text="Status: Idle", fg="white", bg="#1e1e1e", font=("Arial", 10))
-status_label.pack(pady=10)
-
-def update_status():
-    if running:
-        status_label.config(text=f"Status: Running (Press {toggle_key.upper()} to stop)", fg="lime")
-    else:
-        status_label.config(text=f"Status: Idle (Press {toggle_key.upper()} to start)", fg="white")
-    root.after(200, update_status)
-
-# ------------------------
-# Save window state on close
-# ------------------------
-def on_close():
-    geo = root.geometry()
-    wh, xy = geo.split("+", 1)
-    w, h = map(int, wh.split("x"))
-    x, y = map(int, xy.split("+"))
-    save_window_settings(x, y, w, h, toggle_key)
-    root.destroy()
-
-root.protocol("WM_DELETE_WINDOW", on_close)
-
-# ------------------------
-# Launch GUI updates
-# ------------------------
-update_status()
-update_button_appearance()
+root.bind("<Key>", on_key_press_global)
 root.mainloop()
 
