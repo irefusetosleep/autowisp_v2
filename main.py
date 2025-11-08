@@ -25,7 +25,7 @@ if platform.system() == "Windows":
 else:
     pd = pyautogui  # fallback for macOS/Linux
 
-# --- Config handling (persistent settings) ---
+# --- Config handling (persistent settings) ----
 def get_settings_path():
     app_dir = Path(os.getenv('APPDATA') or Path.home() / ".config") / "CinderWispMacro"
     app_dir.mkdir(parents=True, exist_ok=True)
