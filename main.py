@@ -34,10 +34,12 @@ def get_settings_path():
 config = configparser.ConfigParser()
 settings_path = get_settings_path()
 
+# Default settings
+default_delay = 0.0
 if settings_path.exists():
     config.read(settings_path)
 else:
-    config["SETTINGS"] = {"keybind": "F8"}
+    config["SETTINGS"] = {"keybind": "F8", "delay": str(default_delay)}
     with open(settings_path, "w") as f:
         config.write(f)
 
@@ -45,7 +47,7 @@ else:
 letter_folder = resource_path("Original")
 template_folder = resource_path("Letters")
 binarize_thresh = 140
-delay = 0
+delay = float(config["SETTINGS"].get("delay", default_delay))
 running = False
 pd.PAUSE = 0.05
 
@@ -98,7 +100,7 @@ def screenshot():
     return ss
 
 def macro_loop():
-    global running
+    global running, delay
     while running:
         window = get_window()
         if "roblox" not in window.lower():
@@ -115,7 +117,7 @@ def macro_loop():
             sleep(delay)
     print("Macro stopped.")
 
-# --- GUI ---
+# --- GUI Logic ---
 def toggle_macro():
     global running
     running = not running
@@ -146,10 +148,21 @@ def on_key_press_global(event):
     if event.keysym.lower() == key.lower():
         toggle_macro()
 
+def update_delay():
+    global delay
+    try:
+        val = float(delay_entry.get())
+        delay = max(0.0, val)
+        config["SETTINGS"]["delay"] = str(delay)
+        with open(settings_path, "w") as f:
+            config.write(f)
+    except ValueError:
+        messagebox.showerror("Invalid Input", "Delay must be a number (seconds).")
+
 # --- Tkinter Window ---
 root = tk.Tk()
 root.title("Cinder Wisp Macro")
-root.geometry("350x250")
+root.geometry("350x300")
 root.configure(bg="#1c1c1c")
 
 icon_path = resource_path("icon.ico")
@@ -170,6 +183,16 @@ tk.Button(root, text="Change Keybind", command=change_keybind, bg="#333", fg="wh
 keybind_label = tk.Label(root, text=f"Current Keybind: {config['SETTINGS']['keybind']}",
                          fg="white", bg="#1c1c1c", font=("Segoe UI", 10))
 keybind_label.pack(pady=5)
+
+# --- Delay Input ---
+delay_frame = tk.Frame(root, bg="#1c1c1c")
+delay_frame.pack(pady=10)
+tk.Label(delay_frame, text="Delay (seconds):", fg="white", bg="#1c1c1c", font=("Segoe UI", 10)).pack(side="left", padx=5)
+delay_entry = tk.Entry(delay_frame, width=8, justify="center")
+delay_entry.insert(0, str(delay))
+delay_entry.pack(side="left")
+tk.Button(delay_frame, text="Apply", command=update_delay, bg="#333", fg="white",
+          activebackground="#555", relief="flat").pack(side="left", padx=6)
 
 root.bind("<Key>", on_key_press_global)
 root.mainloop()
