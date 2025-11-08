@@ -1,1 +1,1 @@
-To get started download a Release and simply run the exe file
+To get started download a [release](https://github.com/irefusetosleep/autowisp_v2/releases) and follow the instructions.
