@@ -81,7 +81,7 @@ def get_letters(screenshot):
             best_match = max(matches, key=matches.get)
             confidence = matches[best_match]
             if confidence < 0.5:
-                return []
+                return found_letters
             found_letters.append(best_match)
 
     return found_letters
