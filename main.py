@@ -17,7 +17,8 @@ def resource_path(relative_path: str) -> Path:
     """Get absolute path to resource (works for dev and PyInstaller)."""
     if hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS) / relative_path  # Inside PyInstaller bundle
-    return Path(os.path.abspath(".")) / relative_path
+    else:
+        return Path(__file__).resolve().parent / relative_path
 
 # --- Cross-platform key input handling ---
 if platform.system() == "Windows":
@@ -44,8 +45,8 @@ else:
         config.write(f)
 
 # --- Global vars ---
-letter_folder = resource_path("Original")
-template_folder = resource_path("Letters")
+letter_folder = resource_path("./Original")
+template_folder = resource_path("./Letters")
 binarize_thresh = 140
 delay = float(config["SETTINGS"].get("delay", default_delay))
 running = False
@@ -63,7 +64,10 @@ def split_into_4(img):
 
 def get_letters(screenshot):
     found_letters = []
-    templates = list(template_folder.glob("*.[jp][pn]g"))
+    templates = [
+        p for p in template_folder.iterdir()
+        if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg")
+    ]
 
     quadrants = split_into_4(screenshot)
     for screenshot in quadrants:
@@ -71,15 +75,18 @@ def get_letters(screenshot):
         for template_path in templates:
             template = cv.imread(str(template_path), cv.IMREAD_GRAYSCALE)
             if template is None:
+                print("Template load failed:", template_path)
                 continue
 
             match_result = cv.matchTemplate(screenshot, template, cv.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv.minMaxLoc(match_result)
+            print(f"Matching {template_path.stem} yielded confidence {max_val:.2f}")
             matches[template_path.stem.replace("_purple", "").lower()] = max_val
 
         if matches:
             best_match = max(matches, key=matches.get)
             confidence = matches[best_match]
+            print(f"Best match for quadrant: {best_match} with confidence {confidence:.2f}")
             if confidence < 0.5:
                 return found_letters
             found_letters.append(best_match)
@@ -109,6 +116,9 @@ def macro_loop():
 
         ss = screenshot()
         letters = get_letters(ss)
+
+        print("Detected letters:", letters)
+
         if len(letters) == 0:
             sleep(0.1)
             continue
@@ -165,7 +175,8 @@ root.title("Cinder Wisp Macro")
 root.geometry("350x300")
 root.configure(bg="#1c1c1c")
 
-icon_path = resource_path("icon.ico")
+icon_path = resource_path("Cinder_Icon.ico")
+
 try:
     root.iconbitmap(icon_path)
 except Exception as e:
@@ -196,4 +207,3 @@ tk.Button(delay_frame, text="Apply", command=update_delay, bg="#333", fg="white"
 
 root.bind("<Key>", on_key_press_global)
 root.mainloop()
-
