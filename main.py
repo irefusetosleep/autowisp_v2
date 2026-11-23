@@ -1,15 +1,21 @@
-"""Cinder Wisp Macro: reads Deepwoken ritual cast letters off the screen and types them."""
+"""AutoWisp: reads Deepwoken ritual cast letters off the screen and types them."""
 import configparser
+import json
 import logging
 import os
 import platform
 import queue
 import random
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
+import urllib.request
+import webbrowser
 from logging.handlers import RotatingFileHandler
+from tkinter import messagebox
 from pathlib import Path
 from typing import NamedTuple
 
@@ -20,6 +26,11 @@ import pywinctl
 from PIL import Image, ImageDraw, ImageTk
 from pynput import keyboard
 
+try:
+    import pystray  # tray icon; the macro still works without it
+except Exception:
+    pystray = None
+
 IS_WINDOWS = platform.system() == "Windows"
 if IS_WINDOWS:
     import pydirectinput as pd
@@ -29,8 +40,11 @@ else:
 # Built-in wait after each key press. Raise it if the game starts missing keys.
 pd.PAUSE = 0.015
 
-APP_NAME = "CinderWispMacro"
-WINDOW_TITLE = "Cinder Wisp Macro"
+APP_NAME = "AutoWisp"
+WINDOW_TITLE = "AutoWisp"
+APP_VERSION = "1.3.0"  # bump this for each GitHub release (tagged v1.3.0 etc.)
+RELEASES_API = "https://api.github.com/repos/irefusetosleep/autowisp_v2/releases/latest"
+RELEASES_PAGE = "https://github.com/irefusetosleep/autowisp_v2/releases"
 
 # --- Detection tuning ---
 # The ritual cast letters are drawn at a fixed pixel size and position: centred
@@ -95,10 +109,32 @@ def resource_path(relative_path: str) -> Path:
     return base / relative_path
 
 
+OLD_APP_NAME = "CinderWispMacro"  # the macro's settings folder before it was renamed AutoWisp
+
+
 def app_data_dir() -> Path:
-    folder = Path(os.getenv("APPDATA") or Path.home() / ".config") / APP_NAME
+    base = Path(os.getenv("APPDATA") or Path.home() / ".config")
+    folder = base / APP_NAME
+    if not folder.exists():
+        _migrate_old_settings(base / OLD_APP_NAME, folder)
     folder.mkdir(parents=True, exist_ok=True)
     return folder
+
+
+def _migrate_old_settings(old: Path, new: Path):
+    """Carry settings (and logs) over from the old CinderWispMacro folder, once."""
+    if not old.is_dir():
+        return
+    try:
+        old.rename(new)  # moves everything
+    except OSError:
+        # The old folder is in use (e.g. an old copy is still running), so just copy the settings
+        try:
+            new.mkdir(parents=True, exist_ok=True)
+            if (old / "settings.ini").exists():
+                (new / "settings.ini").write_bytes((old / "settings.ini").read_bytes())
+        except OSError:
+            pass
 
 
 def setup_logging(debug: bool):
@@ -152,8 +188,16 @@ class Settings:
             self.config.clear()
         if not self.config.has_section("SETTINGS"):
             self.config.add_section("SETTINGS")
-        section = self.config["SETTINGS"]
+        self._load()
 
+    def reset(self):
+        """Put every setting back to its default."""
+        self.config.remove_section("SETTINGS")
+        self.config.add_section("SETTINGS")
+        self._load()
+
+    def _load(self):
+        section = self.config["SETTINGS"]
         self.keybind = normalize_key(section.get("keybind", "")) or self.DEFAULTS["keybind"]
         try:
             self.delay = max(0.0, float(section.get("delay", self.DEFAULTS["delay"])))
@@ -161,6 +205,12 @@ class Settings:
             self.delay = float(self.DEFAULTS["delay"])
         self.debug = self._bool(section, "debug", False)
         self.human_mode = self._bool(section, "human_mode", False)
+        self.sound = self._bool(section, "sound", True)  # False = muted
+        try:
+            self.volume = min(100, max(0, int(float(section.get("volume", "60")))))
+        except ValueError:
+            self.volume = 60
+        self.tray = self._bool(section, "minimize_to_tray", False)
         self.delay_mode = section.get("delay_mode", "fixed").strip().lower()
         if self.delay_mode not in ("fixed", "ping"):
             self.delay_mode = "fixed"
@@ -193,6 +243,9 @@ class Settings:
         section["delay"] = f"{self.delay:g}"
         section["debug"] = "true" if self.debug else "false"
         section["human_mode"] = "true" if self.human_mode else "false"
+        section["sound"] = "true" if self.sound else "false"
+        section["volume"] = str(self.volume)
+        section["minimize_to_tray"] = "true" if self.tray else "false"
         section["delay_mode"] = self.delay_mode
         section["ping_ms"] = str(self.ping_ms)
         section["overlay"] = "true" if self.overlay else "false"
@@ -500,6 +553,7 @@ ORANGE_HOVER = "#ffb733"
 ORANGE_DIM = "#5c3d0a"
 TEXT = "#f2f2f2"
 MUTED = "#8f8f8f"
+BORDER_TEXT = "#5f5f5f"  # very low-key text, e.g. the version number
 ERROR = "#e5534b"
 
 if IS_WINDOWS:
@@ -571,6 +625,104 @@ class Toggle(tk.Label):
         self.config(image=self._image(self.value))
 
 
+class VolumeSlider(tk.Label):
+    """A smooth horizontal slider (0-100), drawn with Pillow like the toggles.
+    Drag or click to set it, or use the mouse wheel."""
+
+    WIDTH, HEIGHT, SUPERSAMPLE = 104, 20, 4
+
+    def __init__(self, master, value, enabled, on_change, on_release):
+        super().__init__(master, bg=SURFACE, bd=0, cursor="hand2")
+        self.value, self.enabled = value, enabled
+        self.on_change, self.on_release = on_change, on_release
+        self.bind("<Button-1>", self._drag)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<ButtonRelease-1>", lambda e: self.on_release(self.value))
+        self.bind("<MouseWheel>", self._wheel)
+        self._draw()
+
+    def set_enabled(self, enabled):
+        self.enabled = enabled
+        self._draw()
+
+    def _drag(self, event):
+        knob = self.HEIGHT // 2
+        fraction = (event.x - knob) / (self.WIDTH - 2 * knob)
+        self._set(round(min(1.0, max(0.0, fraction)) * 100))
+
+    def _wheel(self, event):
+        self._set(min(100, max(0, self.value + (5 if event.delta > 0 else -5))))
+        self.on_release(self.value)
+
+    def _set(self, value):
+        if value != self.value:
+            self.value = value
+            self._draw()
+            self.on_change(value)
+
+    def _draw(self):
+        s = self.SUPERSAMPLE
+        w, h = self.WIDTH * s, self.HEIGHT * s
+        image = Image.new("RGB", (w, h), SURFACE)
+        draw = ImageDraw.Draw(image)
+        radius = h // 2 - 2 * s  # knob
+        left, right = h // 2, w - h // 2
+        track_h = 4 * s
+        top = h // 2 - track_h // 2
+        x = left + (right - left) * self.value / 100
+        fill = ORANGE if self.enabled else MUTED
+        draw.rounded_rectangle((left - track_h // 2, top, right + track_h // 2, top + track_h),
+                               radius=track_h // 2, fill=BORDER)
+        if self.value > 0:
+            draw.rounded_rectangle((left - track_h // 2, top, x, top + track_h), radius=track_h // 2, fill=fill)
+        draw.ellipse((x - radius, h // 2 - radius, x + radius, h // 2 + radius),
+                     fill=TEXT if self.enabled else MUTED)
+        self._image = ImageTk.PhotoImage(image.resize((self.WIDTH, self.HEIGHT), Image.LANCZOS))
+        self.config(image=self._image)
+
+
+class SpeakerButton(tk.Label):
+    """A speaker icon that mutes / unmutes. Shows a cross when muted."""
+
+    SIZE, SUPERSAMPLE = 20, 4
+    _images = {}
+
+    def __init__(self, master, muted, command):
+        super().__init__(master, bg=SURFACE, bd=0, cursor="hand2")
+        self.muted = muted
+        self.command = command
+        self.bind("<Button-1>", self._click)
+        self._draw()
+
+    @classmethod
+    def _image(cls, muted):
+        if muted not in cls._images:
+            s = cls.SUPERSAMPLE
+            n = cls.SIZE * s
+            image = Image.new("RGB", (n, n), SURFACE)
+            d = ImageDraw.Draw(image)
+            color = MUTED if muted else TEXT
+            u = n / 20  # one unit on a 20x20 grid
+            d.polygon([(2 * u, 7 * u), (6 * u, 7 * u), (11 * u, 3 * u), (11 * u, 17 * u),
+                       (6 * u, 13 * u), (2 * u, 13 * u)], fill=color)
+            if muted:
+                d.line((13.5 * u, 7 * u, 18.5 * u, 13 * u), fill=ERROR, width=int(1.8 * u))
+                d.line((13.5 * u, 13 * u, 18.5 * u, 7 * u), fill=ERROR, width=int(1.8 * u))
+            else:
+                d.arc((8 * u, 6 * u, 15 * u, 14 * u), -50, 50, fill=ORANGE, width=int(1.6 * u))
+                d.arc((8 * u, 3 * u, 19 * u, 17 * u), -50, 50, fill=ORANGE, width=int(1.6 * u))
+            cls._images[muted] = ImageTk.PhotoImage(image.resize((cls.SIZE, cls.SIZE), Image.LANCZOS))
+        return cls._images[muted]
+
+    def _click(self, _event):
+        self.muted = not self.muted
+        self._draw()
+        self.command(self.muted)
+
+    def _draw(self):
+        self.config(image=self._image(self.muted))
+
+
 class SegmentedSwitch(tk.Frame):
     """A two-way (or more) pill switch: the selected option is highlighted orange."""
 
@@ -623,7 +775,7 @@ class StatusOverlay:
             self.win.attributes("-alpha", 0.92)
         except tk.TclError:
             pass
-        self.win.configure(bg=BORDER)  # shows as a 1px border around the inner frame
+        self.win.configure(bg=BG)  # shows as a 1px border around the inner frame (orange while on)
         inner = tk.Frame(self.win, bg=BG, padx=10, pady=4)
         inner.pack(padx=1, pady=1)
         self.dot = tk.Label(inner, text="●", bg=BG, font=(FONT, 10))
@@ -668,8 +820,9 @@ class StatusOverlay:
 
     def set_running(self, running):
         self.dot.config(fg=ORANGE if running else MUTED)
-        self.label.config(text="Autowisp: On" if running else "Autowisp: Off", fg=TEXT if running else MUTED)
-        self.win.configure(bg=ORANGE if running else BORDER)
+        self.label.config(text="AutoWisp: On" if running else "AutoWisp: Off", fg=TEXT if running else MUTED)
+        # Orange outline while on; when off the 1px edge matches the fill, so no outline shows
+        self.win.configure(bg=ORANGE if running else BG)
         self.win.update_idletasks()  # redraw now rather than when Tk next gets round to it
 
     def set_locked(self, locked):
@@ -726,13 +879,15 @@ class App:
 
         self.events = queue.Queue()  # work handed from background threads to the Tk thread
         self.capturing_keybind = False
+        self.update_info = None   # (version, url) once a newer release is found
+        self.tray_icon = None
 
         self.root = tk.Tk()
         self.root.title(WINDOW_TITLE)
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
         try:
-            self.root.iconbitmap(resource_path("Cinder_Icon.ico"))
+            self.root.iconbitmap(resource_path("AutoWisp_Icon.ico"))
         except Exception as e:
             log.debug("Icon load failed: %s", e)  # expected on macOS
 
@@ -746,7 +901,13 @@ class App:
         self.runner = MacroRunner(self.detector, self.settings.effective_delay,
                                   lambda: self.settings.human_mode,
                                   lambda kind, data: self.events.put((kind, data)))
+        self.hwnd = None
+        if IS_WINDOWS:
+            self._build_title_strip()
         self._build_ui()
+        if IS_WINDOWS:
+            self._go_borderless()
+            self.root.bind("<Map>", self._on_map, add="+")
         try:
             self.overlay = StatusOverlay(self.root, self.settings, self._overlay_moved)
         except Exception:
@@ -754,30 +915,134 @@ class App:
             log.exception("Couldn't create the overlay")
         self._start_hotkey_listener()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<Unmap>", self._on_unmap)
         self._poll_events()
         self._overlay_loop()
+        self._instance_loop()
+        threading.Thread(target=self._check_updates, daemon=True).start()
+
+    # ----- custom title bar (Windows) -----
+    def _build_title_strip(self):
+        """Our own minimize / close buttons, replacing the Windows title bar. They sit in the
+        window's top-right corner, over the header's spare space, so there's no empty bar."""
+        self.root.configure(bg=BORDER, padx=1, pady=1)  # 1px edge so the window stands out
+        buttons = self.window_buttons = tk.Frame(self.root, bg=BG)
+        close = FlatButton(buttons, "✕", self._on_close, bg=BG, fg=MUTED, hover_bg="#c42b1c",
+                           font=(FONT, 10), padx=9, pady=3)
+        close.pack(side="right")
+        close.bind("<Enter>", lambda e: close.config(bg="#c42b1c", fg="white"), add="+")
+        close.bind("<Leave>", lambda e: close.config(bg=BG, fg=MUTED), add="+")
+        FlatButton(buttons, "–", self.minimize, bg=BG, fg=MUTED, hover_bg=SURFACE_HI,
+                   font=(FONT, 11), padx=9, pady=1).pack(side="right")
+
+    def _place_window_buttons(self):
+        if getattr(self, "window_buttons", None) is not None:
+            self.window_buttons.place(relx=1.0, x=0, y=0, anchor="ne")
+            self.window_buttons.lift()  # keep them above the rebuilt content
+
+    def _go_borderless(self):
+        """Use Tk's own borderless mode, so Tk knows the window's real frame and moves it
+        cleanly. On its own that mode drops the taskbar button, so add that back."""
+        self.root.overrideredirect(True)
+        self.root.update_idletasks()
+        user32 = ctypes.windll.user32
+        self.hwnd = user32.GetParent(self.root.winfo_id())
+        style = user32.GetWindowLongW(self.hwnd, -20)  # GWL_EXSTYLE
+        style = (style & ~0x80) | 0x40000  # -WS_EX_TOOLWINDOW, +WS_EX_APPWINDOW (taskbar button)
+        user32.SetWindowLongW(self.hwnd, -20, style)
+        # The taskbar only notices the change when the window is shown again
+        self.root.withdraw()
+        self.root.after(10, self.root.deiconify)
+
+    def _on_map(self, event):
+        # Coming back from being minimized: drop the Windows frame we put back to minimize
+        if event.widget is self.root and getattr(self, "_restoring", False):
+            self._restoring = False
+            self.root.after(10, self._go_borderless)
+
+    def _make_draggable(self, *widgets):
+        """Let the window be dragged by these widgets. Done purely in Tk: handing the drag to
+        Windows (WM_NCLBUTTONDOWN) runs a modal loop that re-enters Python and crashes it.
+        Mouse events come in far faster than the screen refreshes, so the window is moved at
+        most once per redraw, to the latest position."""
+        if not IS_WINDOWS:
+            return
+        self._drag_offset = None
+        self._drag_target = None
+
+        def start(event):
+            self._drag_offset = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
+
+        def apply_move():
+            target, self._drag_target = self._drag_target, None
+            if target is not None:
+                self.root.geometry(f"+{target[0]}+{target[1]}")
+
+        def move(event):
+            if self._drag_offset is None:
+                return
+            dx, dy = self._drag_offset
+            first = self._drag_target is None
+            self._drag_target = (event.x_root - dx, event.y_root - dy)
+            if first:
+                self.root.after_idle(apply_move)
+
+        def end(_event):
+            apply_move()
+            self._drag_offset = None
+
+        for widget in widgets:
+            widget.bind("<ButtonPress-1>", start)
+            widget.bind("<B1-Motion>", move)
+            widget.bind("<ButtonRelease-1>", end)
+
+    def minimize(self):
+        if self.settings.tray and pystray is not None:
+            self.root.withdraw()
+            self._start_tray()
+        elif IS_WINDOWS:
+            # Tk can't minimize a borderless window, so give it its frame back just to minimize;
+            # _on_map takes it off again when the window is restored. Switching the frame back
+            # on re-shows the window, so wait for that before minimizing.
+            self.root.overrideredirect(False)
+            self.root.update_idletasks()
+
+            def iconify():
+                self.root.iconify()
+                self._restoring = True  # the next time it's shown is a restore
+
+            self.root.after(30, iconify)
+        else:
+            self.root.iconify()
 
     # ----- layout -----
     def _build_ui(self):
-        outer = tk.Frame(self.root, bg=BG, padx=20, pady=18)
+        # On Windows the title shares the top row with the – / ✕ buttons, so almost no top padding
+        outer = self.outer = tk.Frame(self.root, bg=BG, padx=20, pady=0 if IS_WINDOWS else 18)
         outer.pack(fill="both", expand=True)
+        self._make_draggable(outer)  # empty background drags the window too
 
         # Header
         header = tk.Frame(outer, bg=BG)
-        header.pack(fill="x")
+        header.pack(fill="x", pady=(2, 0) if IS_WINDOWS else 0)
         title_box = tk.Frame(header, bg=BG)
         title_box.pack(side="left")
-        tk.Label(title_box, text="Cinder Wisp", fg=ORANGE, bg=BG,
-                 font=(FONT_BOLD, 20, "bold")).pack(anchor="w")
-        tk.Label(title_box, text="RITUAL CAST MACRO", fg=MUTED, bg=BG,
-                 font=(FONT, 8, "bold")).pack(anchor="w")
+        title = tk.Label(title_box, text="AutoWisp", fg=ORANGE, bg=BG, font=(FONT_BOLD, 20, "bold"))
+        title.pack(anchor="w")
+        self._make_draggable(header, title_box, title)
 
-        self.status_pill = tk.Frame(header, bg=SURFACE, padx=10, pady=4)
-        self.status_pill.pack(side="right", anchor="n", pady=(6, 0))
-        self.status_dot = tk.Label(self.status_pill, text="●", bg=SURFACE, fg=MUTED, font=(FONT, 9))
+        # Status as plain text (coloured dot + word) beside the title
+        self.status_pill = tk.Frame(header, bg=BG)
+        if IS_WINDOWS:
+            # The – / ✕ buttons take the top-right corner, so the status sits beside the title
+            self.status_pill.pack(side="left", padx=(8, 0), pady=(5, 0))
+        else:
+            self.status_pill.pack(side="right")
+        self.status_dot = tk.Label(self.status_pill, text="●", bg=BG, fg=MUTED, font=(FONT, 9))
         self.status_dot.pack(side="left")
-        self.status_label = tk.Label(self.status_pill, text="Idle", bg=SURFACE, fg=TEXT, font=(FONT, 9))
-        self.status_label.pack(side="left", padx=(4, 0))
+        self.status_label = tk.Label(self.status_pill, text="Idle", bg=BG, fg=MUTED, font=(FONT, 9))
+        self.status_label.pack(side="left", padx=(3, 0))
+        self._make_draggable(self.status_pill, self.status_dot, self.status_label)
 
         # Start / stop
         self.start_button = FlatButton(outer, "Start", self.toggle_macro, bg=ORANGE, fg=BG,
@@ -820,19 +1085,50 @@ class App:
         row = self._setting_row(settings, "Human mode")
         Toggle(row, self.settings.human_mode, self.set_human_mode).pack(side="right")
 
+        row = self._setting_row(settings, "Sound")
+        self.volume_label = tk.Label(row, width=4, anchor="e", bg=SURFACE, font=(FONT, 9))
+        self.volume_label.pack(side="right")
+        self.volume_slider = VolumeSlider(row, self.settings.volume, self.settings.sound,
+                                          self._volume_changed, self._volume_released)
+        self.volume_slider.pack(side="right", padx=(4, 0))
+        self.speaker_button = SpeakerButton(row, not self.settings.sound, self.set_muted)
+        self.speaker_button.pack(side="right")
+        self._update_volume_label()
+
         row = self._setting_row(settings, "Status overlay in Roblox")
         Toggle(row, self.settings.overlay, self.set_overlay).pack(side="right")
 
         row = self._setting_row(settings, "Lock overlay position")
         Toggle(row, self.settings.overlay_locked, self.set_overlay_locked).pack(side="right")
 
+        if pystray is not None:
+            row = self._setting_row(settings, "Minimize to tray")
+            Toggle(row, self.settings.tray, self.set_tray).pack(side="right")
+
         row = self._setting_row(settings, "Debug logging")
         Toggle(row, self.settings.debug, self.set_debug).pack(side="right")
+        self._small_button(row, "Open logs", self.open_logs).pack(side="right", padx=(0, 8))
+
+        buttons = tk.Frame(settings, bg=SURFACE)
+        buttons.pack(fill="x", pady=(14, 0))
+        self._small_button(buttons, "Show scan area", self.show_scan_area).pack(side="left")
+        self._small_button(buttons, "Reset settings", self.reset_settings).pack(side="right")
 
         # Footer
         self.hint_label = tk.Label(outer, fg=MUTED, bg=BG, font=(FONT, 8))
         self.hint_label.pack(pady=(12, 0))
         self._update_hint()
+        self.version_label = tk.Label(outer, text=f"v{APP_VERSION}", fg=BORDER_TEXT, bg=BG, font=(FONT, 8))
+        self.version_label.pack()
+        if IS_WINDOWS:
+            tk.Frame(outer, bg=BG, height=16).pack()  # bottom padding (outer has none on Windows)
+        self._show_update()
+        self._sync_running_ui()
+        self._place_window_buttons()
+
+    def _small_button(self, parent, text, command):
+        return FlatButton(parent, text, command, bg=SURFACE_HI, fg=TEXT, hover_bg=BORDER,
+                          font=(FONT, 9), padx=8, pady=2)
 
     def _card(self, parent, pady):
         card = tk.Frame(parent, bg=SURFACE, padx=16, pady=14,
@@ -878,7 +1174,7 @@ class App:
 
     # ----- status display -----
     def set_status(self, text, color):
-        self.status_label.config(text=text)
+        self.status_label.config(text=text, fg=color)
         self.status_dot.config(fg=color)
 
     def _update_hint(self):
@@ -888,15 +1184,153 @@ class App:
     def toggle_macro(self):
         if self.runner.running:
             self.runner.stop()
-            self.start_button.set_style("Start", ORANGE, BG, ORANGE_HOVER)
-            self.set_status("Idle", MUTED)
             self.detail_label.config(text="Stopped.", fg=MUTED)
         else:
             self.runner.start()
-            self.start_button.set_style("Stop", SURFACE_HI, ORANGE, BORDER)
-            self.set_status("Starting", ORANGE)
+        self._sync_running_ui()
         if self.overlay is not None:
             self.overlay.set_running(self.runner.running)
+        if self.settings.sound:
+            play_toggle_sound(self.runner.running, self.settings.volume, self.root)
+
+    def _sync_running_ui(self):
+        if self.runner.running:
+            self.start_button.set_style("Stop", SURFACE_HI, ORANGE, BORDER)
+            self.set_status("Running", ORANGE)
+        else:
+            self.start_button.set_style("Start", ORANGE, BG, ORANGE_HOVER)
+            self.set_status("Idle", MUTED)
+
+    def set_muted(self, muted):
+        self.settings.sound = not muted
+        self.settings.save()
+        self.volume_slider.set_enabled(not muted)
+        self._update_volume_label()
+        if not muted:
+            play_toggle_sound(True, self.settings.volume, self.root)  # a sample of the volume
+
+    def _volume_changed(self, value):
+        self.settings.volume = value
+        self._update_volume_label()
+
+    def _volume_released(self, value):
+        self.settings.volume = value
+        if value > 0 and not self.settings.sound:  # moving the slider unmutes, like most apps
+            self.settings.sound = True
+            self.speaker_button.muted = False
+            self.speaker_button._draw()
+            self.volume_slider.set_enabled(True)
+        self.settings.save()
+        self._update_volume_label()
+        play_toggle_sound(True, value if self.settings.sound else 0, self.root)
+
+    def _update_volume_label(self):
+        muted = not self.settings.sound
+        self.volume_label.config(text="Off" if muted else f"{self.settings.volume}%",
+                                 fg=MUTED if muted else TEXT)
+
+    def set_tray(self, enabled):
+        self.settings.tray = enabled
+        self.settings.save()
+        if enabled:
+            self.detail_label.config(text="Minimizing the window now hides it in the system tray.", fg=MUTED)
+
+    def open_logs(self):
+        try:
+            open_folder(app_data_dir())
+        except Exception as e:
+            self.detail_label.config(text=f"Couldn't open the log folder: {e}", fg=ERROR)
+
+    def show_scan_area(self):
+        window = find_roblox_window_any()
+        if window is None:
+            self.detail_label.config(text="Open Roblox first, then press Show scan area.", fg=ERROR)
+            return
+        try:
+            window.activate()  # bring the game forward so the outline is drawn over it
+        except Exception:
+            pass
+        region = self.detector.capture_region(window)
+        ScanAreaPreview(self.root, region)
+        self.detail_label.config(text="The orange box in Roblox is where letters are read from.", fg=MUTED)
+
+    def reset_settings(self):
+        if not messagebox.askyesno("Reset settings", "Put every setting back to its default?",
+                                   parent=self.root):
+            return
+        self.settings.reset()
+        set_debug_logging(self.settings.debug)
+        if self.overlay is not None:
+            self.overlay.set_locked(self.settings.overlay_locked)
+            self.overlay.win.geometry("+{}+{}".format(*StatusOverlay.DEFAULT_POS))
+        self.outer.destroy()
+        self._build_ui()
+        self._update_overlay()
+        self.detail_label.config(text="Settings reset to defaults.", fg=MUTED)
+
+    # ----- tray, single instance, updates -----
+    def show_window(self):
+        self._stop_tray()
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _on_unmap(self, event):
+        if (event.widget is self.root and self.settings.tray and pystray is not None
+                and self.root.state() == "iconic"):
+            self.root.withdraw()
+            self._start_tray()
+
+    def _start_tray(self):
+        if self.tray_icon is not None:
+            return
+        try:
+            image = Image.open(resource_path("AutoWisp_Icon.ico"))
+        except Exception:
+            image = Image.new("RGB", (64, 64), ORANGE)
+        menu = pystray.Menu(
+            pystray.MenuItem("Show", lambda: self.events.put(("tray_show", None)), default=True),
+            pystray.MenuItem(lambda item: "Stop macro" if self.runner.running else "Start macro",
+                             lambda: self.events.put(("tray_toggle", None))),
+            pystray.MenuItem("Quit", lambda: self.events.put(("tray_quit", None))),
+        )
+        self.tray_icon = pystray.Icon(APP_NAME, image, WINDOW_TITLE, menu)
+        try:
+            self.tray_icon.run_detached()
+        except Exception:
+            log.exception("Couldn't create the tray icon")
+            self.tray_icon = None
+            self.root.deiconify()  # don't leave the window hidden with no way back
+
+    def _stop_tray(self):
+        if self.tray_icon is not None:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+            self.tray_icon = None
+
+    def _instance_loop(self):
+        if show_requested():
+            self.show_window()  # another copy was opened; bring this one forward instead
+        self.root.after(250, self._instance_loop)
+
+    def _check_updates(self):
+        try:
+            result = check_for_update()
+        except Exception as e:
+            log.debug("Update check failed: %s", e)
+            return
+        if result:
+            self.events.put(("update", result))
+
+    def _show_update(self):
+        if self.update_info is None:
+            return
+        version, url = self.update_info
+        self.version_label.config(text=f"v{APP_VERSION} · Update available: {version}", fg=ORANGE,
+                                  cursor="hand2")
+        self.version_label.bind("<Button-1>", lambda e: webbrowser.open(url))
 
     def set_human_mode(self, enabled):
         self.settings.human_mode = enabled
@@ -1044,10 +1478,19 @@ class App:
     def _handle_event(self, kind, data):
         if kind == "key":
             self.handle_key(data)
+        elif kind == "update":
+            self.update_info = data
+            self._show_update()
+        elif kind == "tray_show":
+            self.show_window()
+        elif kind == "tray_toggle":
+            self.toggle_macro()
+        elif kind == "tray_quit":
+            self._on_close()
         elif not self.runner.running and kind != "error":
             return  # late update from a run that was already stopped
         elif kind == "waiting":
-            self.set_status("Waiting for Roblox", MUTED)
+            self.set_status("Waiting", MUTED)  # short to fit beside the title; the line below explains
             self.detail_label.config(text="Focus the Roblox window to begin.", fg=MUTED)
         elif kind == "scanning":
             self.set_status("Running", ORANGE)
@@ -1060,6 +1503,7 @@ class App:
                 self.detail_label.config(text=message, fg=ERROR)
 
     def _on_close(self):
+        self._stop_tray()
         self.runner.stop()
         if getattr(self, "listener", None) is not None:
             self.listener.stop()
@@ -1069,7 +1513,193 @@ class App:
         self.root.mainloop()
 
 
+# --- Single instance ---
+_instance_handles = []  # kept open for the life of the process
+
+
+def claim_single_instance():
+    """True if no other copy is running. Otherwise asks that copy to show its window and
+    returns False, since two copies would both type every letter and break the cast."""
+    if IS_WINDOWS:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CreateEventW.restype = wintypes.HANDLE
+        kernel32.OpenEventW.restype = wintypes.HANDLE
+        mutex = kernel32.CreateMutexW(None, False, f"Local\\{APP_NAME}")
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            event = kernel32.OpenEventW(0x0002, False, f"Local\\{APP_NAME}Show")  # EVENT_MODIFY_STATE
+            if event:
+                kernel32.SetEvent(event)
+                kernel32.CloseHandle(event)
+            return False
+        # Auto-reset event that a second copy sets to ask us to come to the front
+        event = kernel32.CreateEventW(None, False, False, f"Local\\{APP_NAME}Show")
+        _instance_handles.extend([mutex, event])
+        return True
+    import fcntl
+    lock = open(app_data_dir() / "instance.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    _instance_handles.append(lock)
+    return True
+
+
+def show_requested():
+    """True if another copy asked this one to show its window (Windows only)."""
+    if IS_WINDOWS and len(_instance_handles) == 2:
+        return ctypes.windll.kernel32.WaitForSingleObject(wintypes.HANDLE(_instance_handles[1]), 0) == 0
+    return False
+
+
+# --- Small helpers ---
+_tone_cache = {}
+
+
+CHIME_NOTES = (659.25, 880.0)  # E5 and A5: a soft, friendly interval
+
+
+def _chime_wav(on, volume, rate=44100):
+    """A gentle two-note chime as WAV bytes: rising for on, falling for off.
+    Each note fades in softly and dies away like a bell. winsound.Beep has no volume
+    control, so we make our own sound."""
+    key = (on, volume)
+    if key not in _tone_cache:
+        import io, wave
+        notes = CHIME_NOTES if on else CHIME_NOTES[::-1]
+        note_gap, note_len = 0.09, 0.32  # second note starts while the first is still ringing
+        n = int(rate * (note_gap + note_len))
+        t = np.arange(n) / rate
+        signal = np.zeros(n)
+        for i, freq in enumerate(notes):
+            start = i * note_gap
+            local = t - start
+            active = (local >= 0) & (local < note_len)
+            attack = np.clip(local / 0.012, 0, 1)            # 12ms soft start
+            decay = np.exp(-local / 0.09)                    # bell-like die-away
+            tone = np.sin(2 * np.pi * freq * local) + 0.12 * np.sin(4 * np.pi * freq * local)  # touch of warmth
+            signal += np.where(active, tone * attack * decay, 0.0)
+        signal[-int(rate * 0.01):] *= np.linspace(1, 0, int(rate * 0.01))  # end on silence
+        signal /= np.abs(signal).max()
+        amplitude = (volume / 100) ** 2 * 0.55  # squared so the slider feels even to the ear
+        samples = (signal * amplitude * 32767).astype("<i2")
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(rate)
+            wav.writeframes(samples.tobytes())
+        _tone_cache[key] = buffer.getvalue()
+    return _tone_cache[key]
+
+
+def play_toggle_sound(on: bool, volume: int, root=None):
+    """A soft rising chime for on, a falling one for off, at the given volume (0-100).
+    Plays in the background, and a new chime cuts off one that's still playing, so spamming
+    the toggle never leaves a queue of sounds."""
+    if IS_WINDOWS:
+        import winsound
+        if volume <= 0:
+            winsound.PlaySound(None, 0)  # just stop anything still playing
+            return
+        # Windows can only play asynchronously (and cut off the previous sound) from a file,
+        # not from memory, so each chime is written once to a small temp file.
+        winsound.PlaySound(str(_chime_file(on, volume)),
+                           winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+    elif root is not None and volume > 0:
+        root.bell()  # no volume control here
+
+
+def _chime_file(on, volume):
+    folder = Path(tempfile.gettempdir()) / APP_NAME
+    path = folder / f"chime_{'on' if on else 'off'}_{volume}.wav"
+    if not path.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_chime_wav(on, volume))
+    return path
+
+
+def open_folder(path: Path):
+    if IS_WINDOWS:
+        os.startfile(str(path))
+    elif platform.system() == "Darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
+def version_tuple(version: str):
+    return tuple(int(part) for part in version.strip().lstrip("vV").split(".") if part.isdigit())
+
+
+def check_for_update():
+    """(newer version, release page URL) if GitHub has a newer release, otherwise None."""
+    request = urllib.request.Request(RELEASES_API, headers={"User-Agent": APP_NAME,
+                                                            "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(request, timeout=6) as response:
+        release = json.load(response)
+    tag = release.get("tag_name", "")
+    if version_tuple(tag) > version_tuple(APP_VERSION):
+        return tag, release.get("html_url") or RELEASES_PAGE
+    return None
+
+
+def find_roblox_window_any():
+    """The main Roblox window even if it isn't focused (the biggest visible one)."""
+    best = None
+    for window in pywinctl.getAllWindows():
+        try:
+            if window.isVisible and window.width > 200 and is_roblox(window):
+                if best is None or window.width * window.height > best.width * best.height:
+                    best = window
+        except Exception:
+            continue
+    return best
+
+
+class ScanAreaPreview:
+    """Briefly outlines the area the macro reads letters from, split into its 4 slots.
+    Click-through and hidden from recordings, like the status overlay."""
+
+    KEY = "#ff00fe"  # drawn transparent
+
+    def __init__(self, root, region, seconds=4.0):
+        x, y, w, h = region
+        self.win = tk.Toplevel(root)
+        self.win.withdraw()
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        try:
+            self.win.attributes("-transparentcolor", self.KEY)
+        except tk.TclError:
+            self.win.attributes("-alpha", 0.6)  # no colour-key transparency on this platform
+        self.win.geometry(f"{w}x{h}+{x}+{y}")
+        canvas = tk.Canvas(self.win, width=w, height=h, bg=self.KEY, highlightthickness=0)
+        canvas.pack()
+        canvas.create_rectangle(1, 1, w - 2, h - 2, outline=ORANGE, width=2)
+        for i in range(1, SLOTS):
+            sx = i * (w // SLOTS)
+            canvas.create_line(sx, 4, sx, h - 4, fill=ORANGE, dash=(4, 4))
+        canvas.create_text(6, 4, text="Scan area", anchor="nw", fill=ORANGE, font=(FONT_BOLD, 9, "bold"))
+        self.win.update_idletasks()
+        if IS_WINDOWS:
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetAncestor(self.win.winfo_id(), 2)
+            style = user32.GetWindowLongW(hwnd, -20)
+            # layered + click-through + no taskbar entry + never takes focus
+            user32.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20 | 0x80 | 0x08000000)
+            user32.SetWindowDisplayAffinity(hwnd, 0x11)  # hide from recordings
+            user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x1 | 0x2 | 0x10)
+        else:
+            self.win.deiconify()
+        self.win.after(int(seconds * 1000), self.win.destroy)
+
+
 def main():
+    if not claim_single_instance():
+        return  # the copy that's already running brings its window to the front
     App().run()
 
 
