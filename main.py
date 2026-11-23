@@ -9,8 +9,11 @@ import pywinctl
 import platform
 import configparser
 import threading
+import queue
+import traceback
 import tkinter as tk
 from tkinter import ttk, messagebox
+from pynput import keyboard
 
 # --- Handle file paths in both source and PyInstaller EXE/app ---
 def resource_path(relative_path: str) -> Path:
@@ -36,21 +39,50 @@ config = configparser.ConfigParser()
 settings_path = get_settings_path()
 
 # Default settings
+default_keybind = "F8"
 default_delay = 0.0
-if settings_path.exists():
-    config.read(settings_path)
-else:
-    config["SETTINGS"] = {"keybind": "F8", "delay": str(default_delay)}
+
+def save_settings():
     with open(settings_path, "w") as f:
         config.write(f)
+
+def load_settings():
+    """Load settings, falling back to defaults for anything missing or invalid."""
+    try:
+        config.read(settings_path)
+    except configparser.Error as e:
+        print("Settings file is corrupt, resetting to defaults:", e)
+        config.clear()
+
+    if not config.has_section("SETTINGS"):
+        config.add_section("SETTINGS")
+    settings = config["SETTINGS"]
+
+    if not settings.get("keybind", "").strip():
+        settings["keybind"] = default_keybind
+
+    try:
+        loaded_delay = max(0.0, float(settings.get("delay", default_delay)))
+    except ValueError:
+        loaded_delay = default_delay
+    settings["delay"] = str(loaded_delay)
+
+    save_settings()
+    return loaded_delay
 
 # --- Global vars ---
 letter_folder = resource_path("./Original")
 template_folder = resource_path("./Letters")
 binarize_thresh = 140
-delay = float(config["SETTINGS"].get("delay", default_delay))
-running = False
+delay = load_settings()
 pd.PAUSE = 0.05
+
+# Stop signal for the currently running macro thread (None when stopped)
+current_stop_event = None
+macro_thread = None
+
+# Work handed from background threads to the Tk main thread
+ui_queue = queue.Queue()
 
 # --- Core functions ---
 def get_window():
@@ -81,7 +113,9 @@ def get_letters(screenshot):
             match_result = cv.matchTemplate(screenshot, template, cv.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv.minMaxLoc(match_result)
             print(f"Matching {template_path.stem} yielded confidence {max_val:.2f}")
-            matches[template_path.stem.replace("_purple", "").lower()] = max_val
+            # Normal and purple templates share a letter, so keep the better score of the two
+            letter = template_path.stem.replace("_purple", "").lower()
+            matches[letter] = max(matches.get(letter, -1.0), max_val)
 
         if matches:
             best_match = max(matches, key=matches.get)
@@ -106,57 +140,145 @@ def screenshot():
     _, ss = cv.threshold(ss, binarize_thresh, 255, cv.THRESH_BINARY)
     return ss
 
-def macro_loop():
-    global running, delay
-    while running:
-        window = get_window()
-        if "roblox" not in window.lower():
-            sleep(0.1)
-            continue
+def macro_loop(stop_event, previous_thread):
+    # Never let two loops press keys at once: wait for the last run to fully exit
+    if previous_thread is not None:
+        previous_thread.join()
 
-        ss = screenshot()
-        letters = get_letters(ss)
+    try:
+        while not stop_event.is_set():
+            window = get_window()
+            if "roblox" not in window.lower():
+                stop_event.wait(0.1)
+                continue
 
-        print("Detected letters:", letters)
+            ss = screenshot()
+            letters = get_letters(ss)
 
-        if len(letters) == 0:
-            sleep(0.1)
-            continue
-        for letter in letters:
-            pd.press(letter)
-            sleep(delay)
-    print("Macro stopped.")
+            print("Detected letters:", letters)
+
+            if len(letters) == 0:
+                stop_event.wait(0.1)
+                continue
+            for letter in letters:
+                if stop_event.is_set():
+                    break
+                pd.press(letter)
+                stop_event.wait(delay)
+    except Exception as e:
+        traceback.print_exc()
+        message = f"The macro stopped because of an error:\n\n{type(e).__name__}: {e}"
+        ui_queue.put(lambda: on_macro_crashed(stop_event, message))
+    finally:
+        print("Macro stopped.")
 
 # --- GUI Logic ---
-def toggle_macro():
-    global running
-    running = not running
-    if running:
+def set_button_running(is_running):
+    if is_running:
         start_button.config(text="Stop", bg="red", activebackground="red")
-        threading.Thread(target=macro_loop, daemon=True).start()
     else:
         start_button.config(text="Start", bg="green", activebackground="green")
 
-def change_keybind():
-    def on_key_press(event):
-        new_key = event.keysym
-        config["SETTINGS"]["keybind"] = new_key
-        with open(settings_path, "w") as f:
-            config.write(f)
-        keybind_label.config(text=f"Current Keybind: {new_key}")
-        bind_window.destroy()
+def toggle_macro():
+    global current_stop_event, macro_thread
+    if current_stop_event is None:
+        current_stop_event = threading.Event()
+        macro_thread = threading.Thread(
+            target=macro_loop, args=(current_stop_event, macro_thread), daemon=True
+        )
+        macro_thread.start()
+        set_button_running(True)
+    else:
+        current_stop_event.set()
+        current_stop_event = None
+        set_button_running(False)
 
-    bind_window = tk.Toplevel(root)
-    bind_window.title("Set Keybind")
-    bind_window.geometry("300x150")
-    bind_window.configure(bg="#1c1c1c")
-    tk.Label(bind_window, text="Press a new key...", fg="orange", bg="#1c1c1c", font=("Segoe UI", 12)).pack(expand=True)
-    bind_window.bind("<Key>", on_key_press)
+def on_macro_crashed(stop_event, message):
+    global current_stop_event
+    # Only reset the UI if the crashed run is still the active one
+    if stop_event is current_stop_event:
+        stop_event.set()
+        current_stop_event = None
+        set_button_running(False)
+        messagebox.showerror("Macro Error", message)
 
-def on_key_press_global(event):
-    key = config["SETTINGS"]["keybind"]
-    if event.keysym.lower() == key.lower():
+# --- Global hotkey handling ---
+# Older settings files stored Tk key names; map them to pynput names
+KEY_ALIASES = {
+    "escape": "esc",
+    "return": "enter",
+    "prior": "page_up",
+    "next": "page_down",
+    "control_l": "ctrl_l",
+    "control_r": "ctrl_r",
+    "print": "print_screen",
+}
+MACRO_KEYS = {"c", "v", "x", "z"}  # keys the macro presses itself
+keybind_window = None
+
+def normalize_key(name):
+    name = name.strip().lower()
+    return KEY_ALIASES.get(name, name)
+
+def display_key(name):
+    name = normalize_key(name)
+    return name.upper() if len(name) <= 3 else name.replace("_", " ").title()
+
+def pynput_key_name(key):
+    if isinstance(key, keyboard.KeyCode):
+        return key.char.lower() if key.char else None
+    return key.name.lower()
+
+def on_global_key_press(key):
+    # Runs on pynput's listener thread, so hand off to the Tk thread
+    name = pynput_key_name(key)
+    if name is not None:
+        ui_queue.put(lambda: handle_hotkey(name))
+
+def handle_hotkey(name):
+    if keybind_window is not None:
+        set_keybind(name)
+    elif name == normalize_key(config["SETTINGS"]["keybind"]):
         toggle_macro()
+
+def set_keybind(name):
+    if name in MACRO_KEYS:
+        keybind_prompt.config(text=f"{display_key(name)} is used by the macro.\nPress a different key...")
+        return
+    config["SETTINGS"]["keybind"] = name
+    save_settings()
+    keybind_label.config(text=f"Current Keybind: {display_key(name)}")
+    close_keybind_window()
+
+def close_keybind_window():
+    global keybind_window
+    if keybind_window is not None:
+        keybind_window.destroy()
+        keybind_window = None
+
+def change_keybind():
+    global keybind_window, keybind_prompt
+    if keybind_window is not None:
+        keybind_window.lift()
+        return
+
+    keybind_window = tk.Toplevel(root)
+    keybind_window.title("Set Keybind")
+    keybind_window.geometry("300x150")
+    keybind_window.configure(bg="#1c1c1c")
+    keybind_window.protocol("WM_DELETE_WINDOW", close_keybind_window)
+    keybind_prompt = tk.Label(keybind_window, text="Press a new key...", fg="orange", bg="#1c1c1c",
+                              font=("Segoe UI", 12))
+    keybind_prompt.pack(expand=True)
+
+def poll_ui_queue():
+    while True:
+        try:
+            callback = ui_queue.get_nowait()
+        except queue.Empty:
+            break
+        callback()
+    root.after(30, poll_ui_queue)
 
 def update_delay():
     global delay
@@ -164,8 +286,7 @@ def update_delay():
         val = float(delay_entry.get())
         delay = max(0.0, val)
         config["SETTINGS"]["delay"] = str(delay)
-        with open(settings_path, "w") as f:
-            config.write(f)
+        save_settings()
     except ValueError:
         messagebox.showerror("Invalid Input", "Delay must be a number (seconds).")
 
@@ -191,7 +312,7 @@ start_button.pack(pady=10)
 tk.Button(root, text="Change Keybind", command=change_keybind, bg="#333", fg="white",
           activebackground="#555", relief="flat").pack(pady=10)
 
-keybind_label = tk.Label(root, text=f"Current Keybind: {config['SETTINGS']['keybind']}",
+keybind_label = tk.Label(root, text=f"Current Keybind: {display_key(config['SETTINGS']['keybind'])}",
                          fg="white", bg="#1c1c1c", font=("Segoe UI", 10))
 keybind_label.pack(pady=5)
 
@@ -205,5 +326,14 @@ delay_entry.pack(side="left")
 tk.Button(delay_frame, text="Apply", command=update_delay, bg="#333", fg="white",
           activebackground="#555", relief="flat").pack(side="left", padx=6)
 
-root.bind("<Key>", on_key_press_global)
+# Listen for the hotkey system-wide, so it works while Roblox is focused
+try:
+    keyboard.Listener(on_press=on_global_key_press, daemon=True).start()
+except Exception as e:
+    messagebox.showwarning(
+        "Hotkey Unavailable",
+        f"Couldn't listen for the global hotkey ({e}).\nUse the Start/Stop button instead.",
+    )
+
+poll_ui_queue()
 root.mainloop()
