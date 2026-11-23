@@ -60,9 +60,12 @@ MATCH_THRESHOLD = 0.5
 # there's no letter before it to confirm a cast is showing. Real letters score ~0.8-0.9;
 # letter-sized patches of the game background top out around 0.5.
 GAP_MATCH_THRESHOLD = 0.7
+# A real letter is a bright shape on a darker backdrop, so almost none of the pixels around its
+# strokes are lit (measured 0%). Bright fog, sky and edges that happen to score like a letter
+# light up 25%+ of them, so a match lighting more than this share is rejected.
+MAX_BACKGROUND_LIT = 0.12
 PURPLE_BLUE_OVER_GREEN = 40  # purple letters measure ~88 more blue than green, white ones ~0
-SLOTS = 4                    # a ritual cast shows 1-4 letters
-# If the exact same letters are still showing right after typing them, the game may just not have
+SLOTS = 4                    # a ritual cast shows 1-4 letters# If the exact same letters are still showing right after typing them, the game may just not have
 # updated yet, so wait this long before assuming the keys didn't register and typing them again
 REPEAT_GUARD_SECONDS = 0.2
 RESCAN_DELAY = 0.02          # when a scan finds under 4 letters, look again this soon (fading in)
@@ -382,7 +385,7 @@ class Detector:
         """Letters from left to right. Empty slots are skipped, so a letter left on its own in a
         later slot (after the ones before it were typed) is still found."""
         slot_width = image.shape[1] // SLOTS
-        letters = []
+        letters, scores = [], []
         after_gap = False
         for i in range(SLOTS):
             x0 = i * slot_width
@@ -406,12 +409,25 @@ class Detector:
             if score < (GAP_MATCH_THRESHOLD if after_gap else MATCH_THRESHOLD):
                 after_gap = True
                 continue
+            th, tw = template.shape[:2]
+            patch = slot[ly:ly + th, lx:lx + tw]
+            background_lit = float((patch[template == 0] > 0).mean())
+            if background_lit > MAX_BACKGROUND_LIT:
+                log.debug("Slot %d: rejected %s (%.2f) - %.0f%% of its background is lit",
+                          i + 1, key, score, background_lit * 100)
+                after_gap = True
+                continue
             purple = False
             if color is not None:
-                th, tw = template.shape[:2]
                 pixels = color[ly:ly + th, x0 + lx:x0 + lx + tw][template > 0]
                 purple = is_purple(pixels)
             letters.append(Letter(key, purple))
+            scores.append(score)
+        if len(letters) < SLOTS:
+            # Fewer than 4 letters is where false positives come from (a full cast is 4), so
+            # each of these must be a confident match. A letter still fading in that misses
+            # this is simply picked up on the next scan.
+            letters = [l for l, s in zip(letters, scores) if s >= GAP_MATCH_THRESHOLD]
         return letters
 
 
@@ -508,13 +524,19 @@ class MacroRunner:
                     stop_event.wait(0.015)  # a scan takes ~10ms, so check again quickly
                     continue
                 if len(letters) < SLOTS:
-                    # The next letters may still be fading in. Look again so we don't type a
-                    # partial batch and leave a letter behind.
+                    # Look again: the next letters may still be fading in (so we don't type a
+                    # partial batch and leave a letter behind), and a partial read has to still
+                    # be there, since a real cast stays on screen but a passing patch of
+                    # background that looked like a letter for one frame doesn't.
                     stop_event.wait(RESCAN_DELAY)
                     again = self.detector.read_letters(*self.detector.grab(region))
                     if len(again) > len(letters) and again[:len(letters)] == letters:
                         log.debug("Rescan found more letters: %d -> %d", len(letters), len(again))
                         letters = again
+                    elif again != letters:
+                        log.debug("Ignored %s: gone on the second look",
+                                  " ".join(l.key.upper() for l in letters))
+                        continue
                 if letters == last_typed:
                     held = time.monotonic() - last_typed_at
                     if held < REPEAT_GUARD_SECONDS:
