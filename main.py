@@ -53,6 +53,15 @@ SLOTS = 4                    # a ritual cast shows 1-4 letters
 REPEAT_GUARD_SECONDS = 0.2
 RESCAN_DELAY = 0.02          # when a scan finds under 4 letters, look again this soon (fading in)
 
+# --- Ping-based delay ---
+# Roblox servers don't answer pings, so the player enters the ping Roblox shows them.
+# Each key has to reach the server and the updated cast come back (a full ping), plus the
+# game needs a fixed amount of time to handle the key whatever the ping.
+# delay = base + ping * factor. Measured: at 33ms ping the fastest working delay is 0.1s.
+PING_DELAY_BASE = 0.07
+PING_DELAY_FACTOR = 1.0
+MAX_PING_MS = 1000
+
 # --- Human mode timing (seconds): (average, spread, shortest, longest) ---
 # A good player already knows the ritual's normal letters, so those flow quickly.
 # Only the purple letters are random and need reading.
@@ -152,6 +161,13 @@ class Settings:
             self.delay = float(self.DEFAULTS["delay"])
         self.debug = self._bool(section, "debug", False)
         self.human_mode = self._bool(section, "human_mode", False)
+        self.delay_mode = section.get("delay_mode", "fixed").strip().lower()
+        if self.delay_mode not in ("fixed", "ping"):
+            self.delay_mode = "fixed"
+        try:
+            self.ping_ms = min(MAX_PING_MS, max(0, int(float(section.get("ping_ms", "100")))))
+        except ValueError:
+            self.ping_ms = 100
         self.overlay = self._bool(section, "overlay", False)
         self.overlay_locked = self._bool(section, "overlay_locked", False)
         try:
@@ -159,6 +175,12 @@ class Settings:
         except (KeyError, ValueError):
             self.overlay_pos = None  # use the default spot
         self.save()
+
+    def effective_delay(self):
+        """Seconds to wait between keys: the fixed value, or worked out from the player's ping."""
+        if self.delay_mode == "ping":
+            return round(PING_DELAY_BASE + self.ping_ms / 1000 * PING_DELAY_FACTOR, 3)
+        return self.delay
 
     @staticmethod
     def _bool(section, key, default):
@@ -171,6 +193,8 @@ class Settings:
         section["delay"] = f"{self.delay:g}"
         section["debug"] = "true" if self.debug else "false"
         section["human_mode"] = "true" if self.human_mode else "false"
+        section["delay_mode"] = self.delay_mode
+        section["ping_ms"] = str(self.ping_ms)
         section["overlay"] = "true" if self.overlay else "false"
         section["overlay_locked"] = "true" if self.overlay_locked else "false"
         if self.overlay_pos is not None:
@@ -547,6 +571,33 @@ class Toggle(tk.Label):
         self.config(image=self._image(self.value))
 
 
+class SegmentedSwitch(tk.Frame):
+    """A two-way (or more) pill switch: the selected option is highlighted orange."""
+
+    def __init__(self, master, options, value, command):
+        super().__init__(master, bg=BORDER, padx=1, pady=1)
+        self.command = command
+        self.value = value
+        self.buttons = {}
+        for key, text in options:
+            button = tk.Label(self, text=text, font=(FONT_BOLD, 9, "bold"), padx=9, pady=2, cursor="hand2")
+            button.pack(side="left")
+            button.bind("<Button-1>", lambda e, k=key: self.select(k))
+            self.buttons[key] = button
+        self._draw()
+
+    def select(self, key):
+        if key != self.value:
+            self.value = key
+            self._draw()
+            self.command(key)
+
+    def _draw(self):
+        for key, button in self.buttons.items():
+            on = key == self.value
+            button.config(bg=ORANGE if on else SURFACE_HI, fg=BG if on else MUTED)
+
+
 class StatusOverlay:
     """A small always-on-top badge showing whether the macro is on. Shown only over Roblox."""
 
@@ -692,7 +743,7 @@ class App:
             self._show_fatal(f"Couldn't load the letter templates.\n\n{e}")
             return
 
-        self.runner = MacroRunner(self.detector, lambda: self.settings.delay,
+        self.runner = MacroRunner(self.detector, self.settings.effective_delay,
                                   lambda: self.settings.human_mode,
                                   lambda kind, data: self.events.put((kind, data)))
         self._build_ui()
@@ -733,7 +784,7 @@ class App:
                                        hover_bg=ORANGE_HOVER, font=(FONT_BOLD, 13, "bold"), pady=10)
         self.start_button.pack(fill="x", pady=(18, 0))
         self.detail_label = tk.Label(outer, text="Press Start, then focus Roblox.", fg=MUTED, bg=BG,
-                                     font=(FONT, 9), wraplength=280)
+                                     font=(FONT, 9), wraplength=250)  # fits the window's width
         self.detail_label.pack(pady=(8, 0))
 
         # Settings card
@@ -748,19 +799,23 @@ class App:
         self.keybind_button.pack(side="right")
 
         row = self._setting_row(settings, "Delay between keys")
-        tk.Label(row, text="sec", fg=MUTED, bg=SURFACE, font=(FONT, 9)).pack(side="right", padx=(6, 0))
-        FlatButton(row, "+", lambda: self.nudge_delay(0.05), bg=SURFACE_HI, fg=TEXT, hover_bg=BORDER,
-                   font=(FONT_BOLD, 10, "bold"), padx=8, pady=1).pack(side="right")
+        self.delay_switch = SegmentedSwitch(row, [("fixed", "Fixed"), ("ping", "Ping")],
+                                            self.settings.delay_mode, self.set_delay_mode)
+        self.delay_switch.pack(side="right")
+
+        controls = tk.Frame(settings, bg=SURFACE)
+        controls.pack(fill="x", pady=(6, 0))
+        self.delay_info = tk.Label(controls, fg=MUTED, bg=SURFACE, font=(FONT, 9))
+        self.delay_info.pack(side="left")
         self.delay_var = tk.StringVar(value=f"{self.settings.delay:g}")
-        self.delay_entry = tk.Entry(row, textvariable=self.delay_var, width=5, justify="center",
-                                    bg=SURFACE_HI, fg=TEXT, insertbackground=ORANGE, relief="flat",
-                                    font=(FONT_MONO, 10), highlightthickness=1,
-                                    highlightbackground=BORDER, highlightcolor=ORANGE)
-        self.delay_entry.pack(side="right", padx=4, ipady=3)
-        self.delay_entry.bind("<Return>", lambda e: self.apply_delay())
-        self.delay_entry.bind("<FocusOut>", lambda e: self.apply_delay())
-        FlatButton(row, "−", lambda: self.nudge_delay(-0.05), bg=SURFACE_HI, fg=TEXT, hover_bg=BORDER,
-                   font=(FONT_BOLD, 10, "bold"), padx=8, pady=1).pack(side="right")
+        self.fixed_controls, self.delay_entry = self._stepper(
+            controls, self.delay_var, "sec", self.apply_delay, lambda: self.nudge_delay(0.05),
+            lambda: self.nudge_delay(-0.05))
+        self.ping_var = tk.StringVar(value=str(self.settings.ping_ms))
+        self.ping_controls, self.ping_entry = self._stepper(
+            controls, self.ping_var, "ms", self.apply_ping, lambda: self.nudge_ping(10),
+            lambda: self.nudge_ping(-10))
+        self._show_delay_controls()
 
         row = self._setting_row(settings, "Human mode")
         Toggle(row, self.settings.human_mode, self.set_human_mode).pack(side="right")
@@ -784,6 +839,32 @@ class App:
                         highlightthickness=1, highlightbackground=BORDER)
         card.pack(fill="x", pady=pady)
         return card
+
+    def _stepper(self, parent, var, unit, apply, increase, decrease):
+        """[−] [value] [+] unit — returns (frame, entry)."""
+        frame = tk.Frame(parent, bg=SURFACE)
+        tk.Label(frame, text=unit, fg=MUTED, bg=SURFACE, font=(FONT, 9)).pack(side="right", padx=(6, 0))
+        FlatButton(frame, "+", increase, bg=SURFACE_HI, fg=TEXT, hover_bg=BORDER,
+                   font=(FONT_BOLD, 10, "bold"), padx=8, pady=1).pack(side="right")
+        entry = tk.Entry(frame, textvariable=var, width=5, justify="center", bg=SURFACE_HI, fg=TEXT,
+                         insertbackground=ORANGE, relief="flat", font=(FONT_MONO, 10),
+                         highlightthickness=1, highlightbackground=BORDER, highlightcolor=ORANGE)
+        entry.pack(side="right", padx=4, ipady=3)
+        entry.bind("<Return>", lambda e: apply())
+        entry.bind("<FocusOut>", lambda e: apply())
+        FlatButton(frame, "−", decrease, bg=SURFACE_HI, fg=TEXT, hover_bg=BORDER,
+                   font=(FONT_BOLD, 10, "bold"), padx=8, pady=1).pack(side="right")
+        return frame, entry
+
+    def _show_delay_controls(self):
+        ping = self.settings.delay_mode == "ping"
+        self.fixed_controls.pack_forget()
+        self.ping_controls.pack_forget()
+        (self.ping_controls if ping else self.fixed_controls).pack(side="right")
+        self.delay_info.config(text=f"= {self.settings.effective_delay():g}s" if ping else "")
+        if self.delay_switch.value != self.settings.delay_mode:
+            self.delay_switch.value = self.settings.delay_mode
+            self.delay_switch._draw()
 
     def _setting_row(self, parent, label):
         row = tk.Frame(parent, bg=SURFACE)
@@ -884,8 +965,8 @@ class App:
                 self._update_hint()
                 self.detail_label.config(text=f"Hotkey set to {display_key(name)}.", fg=MUTED)
             return
-        if self.root.focus_get() is self.delay_entry:
-            return  # typing a delay value, not pressing the hotkey
+        if self.root.focus_get() in (self.delay_entry, self.ping_entry):
+            return  # typing a value, not pressing the hotkey
         if name == self.settings.keybind:
             self.toggle_macro()
 
@@ -903,6 +984,33 @@ class App:
         self.apply_delay()
         self.delay_var.set(f"{max(0.0, round(self.settings.delay + step, 3)):g}")
         self.apply_delay()
+
+    def apply_ping(self):
+        try:
+            value = min(MAX_PING_MS, max(0, round(float(self.ping_var.get()))))
+        except ValueError:
+            value = self.settings.ping_ms
+            self.detail_label.config(text="Ping must be a number of milliseconds.", fg=ERROR)
+        self.settings.ping_ms = value
+        self.settings.save()
+        self.ping_var.set(str(value))
+        self._show_delay_controls()
+
+    def nudge_ping(self, step):
+        self.apply_ping()
+        self.ping_var.set(str(max(0, self.settings.ping_ms + step)))
+        self.apply_ping()
+
+    def set_delay_mode(self, mode):
+        self.apply_delay()
+        self.apply_ping()
+        self.settings.delay_mode = mode
+        self.settings.save()
+        self._show_delay_controls()
+        if mode == "ping":
+            self.detail_label.config(
+                text=f"Enter the ping Roblox shows you (Shift+F3). "
+                     f"Delay = {PING_DELAY_BASE * 1000:g}ms + your ping.", fg=MUTED)
 
     def set_debug(self, enabled):
         self.settings.debug = enabled
