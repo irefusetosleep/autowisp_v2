@@ -214,6 +214,7 @@ class Settings:
         except ValueError:
             self.volume = 60
         self.tray = self._bool(section, "minimize_to_tray", False)
+        self.start_minimized = self._bool(section, "start_minimized", False)
         self.delay_mode = section.get("delay_mode", "fixed").strip().lower()
         if self.delay_mode not in ("fixed", "ping"):
             self.delay_mode = "fixed"
@@ -249,6 +250,7 @@ class Settings:
         section["sound"] = "true" if self.sound else "false"
         section["volume"] = str(self.volume)
         section["minimize_to_tray"] = "true" if self.tray else "false"
+        section["start_minimized"] = "true" if self.start_minimized else "false"
         section["delay_mode"] = self.delay_mode
         section["ping_ms"] = str(self.ping_ms)
         section["overlay"] = "true" if self.overlay else "false"
@@ -895,9 +897,11 @@ class StatusOverlay:
 
 
 class App:
-    def __init__(self):
+    def __init__(self, launched_at_startup=False):
         self.settings = Settings(app_data_dir() / "settings.ini")
         setup_logging(self.settings.debug)
+        # Started by Windows at sign-in with "Start minimized" on: open straight to the tray/taskbar
+        self._start_hidden = launched_at_startup and self.settings.start_minimized
 
         self.events = queue.Queue()  # work handed from background threads to the Tk thread
         self.capturing_keybind = False
@@ -908,6 +912,8 @@ class App:
         self.root.title(WINDOW_TITLE)
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
+        if self._start_hidden:
+            self.root.attributes("-alpha", 0.0)  # invisible until it's tucked away, so no flash
         try:
             self.root.iconbitmap(resource_path("AutoWisp_Icon.ico"))
         except Exception as e:
@@ -942,6 +948,15 @@ class App:
         self._overlay_loop()
         self._instance_loop()
         threading.Thread(target=self._check_updates, daemon=True).start()
+        if self._start_hidden:
+            # Wait for the borderless set-up (which re-shows the window) to finish first
+            self.root.after(150, self._finish_hidden_start)
+
+    def _finish_hidden_start(self):
+        log.info("Started with Windows; starting minimized")
+        self.minimize()  # to the tray if "Minimize to tray" is on, otherwise the taskbar
+        # Make it visible again once it's out of sight, so restoring shows it normally
+        self.root.after(400, lambda: self.root.attributes("-alpha", 1.0))
 
     # ----- custom title bar (Windows) -----
     def _build_title_strip(self):
@@ -1127,6 +1142,13 @@ class App:
             row = self._setting_row(settings, "Minimize to tray")
             Toggle(row, self.settings.tray, self.set_tray).pack(side="right")
 
+        if IS_WINDOWS:
+            row = self._setting_row(settings, "Launch on Windows startup")
+            Toggle(row, get_launch_on_startup(), self.set_startup).pack(side="right")
+
+            row = self._setting_row(settings, "Start minimized")
+            Toggle(row, self.settings.start_minimized, self.set_start_minimized).pack(side="right")
+
         row = self._setting_row(settings, "Debug logging")
         Toggle(row, self.settings.debug, self.set_debug).pack(side="right")
         self._small_button(row, "Open logs", self.open_logs).pack(side="right", padx=(0, 8))
@@ -1257,6 +1279,24 @@ class App:
         if enabled:
             self.detail_label.config(text="Minimizing the window now hides it in the system tray.", fg=MUTED)
 
+    def set_startup(self, enabled):
+        try:
+            set_launch_on_startup(enabled)
+        except OSError as e:
+            log.exception("Couldn't change the startup entry")
+            self.detail_label.config(text=f"Couldn't change launch on startup: {e}", fg=ERROR)
+            return
+        if enabled:
+            self.detail_label.config(text="AutoWisp will open when you sign in to Windows.", fg=MUTED)
+
+    def set_start_minimized(self, enabled):
+        self.settings.start_minimized = enabled
+        self.settings.save()
+        if enabled:
+            where = "the system tray" if self.settings.tray and pystray is not None else "the taskbar"
+            self.detail_label.config(text=f"When it opens with Windows, it goes straight to {where}.",
+                                     fg=MUTED)
+
     def open_logs(self):
         try:
             open_folder(app_data_dir())
@@ -1282,6 +1322,11 @@ class App:
             return
         self.settings.reset()
         set_debug_logging(self.settings.debug)
+        if IS_WINDOWS:
+            try:
+                set_launch_on_startup(False)  # the default is off
+            except OSError:
+                log.exception("Couldn't remove the startup entry")
         if self.overlay is not None:
             self.overlay.set_locked(self.settings.overlay_locked)
             self.overlay.win.geometry("+{}+{}".format(*StatusOverlay.DEFAULT_POS))
@@ -1719,10 +1764,59 @@ class ScanAreaPreview:
         self.win.after(int(seconds * 1000), self.win.destroy)
 
 
+# --- Launch on Windows startup ---
+# A per-user entry under the registry's Run key: Windows starts it at sign-in, no admin needed.
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+STARTUP_ARG = "--startup"  # tells the app it was started by Windows, not by the user
+
+
+def startup_command():
+    """The command Windows should run at sign-in: this exe, or pythonw + this script."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}" {STARTUP_ARG}'
+    pythonw = Path(sys.executable).with_name("pythonw.exe")  # no console window
+    python = pythonw if pythonw.exists() else Path(sys.executable)
+    return f'"{python}" "{Path(__file__).resolve()}" {STARTUP_ARG}'
+
+
+def get_launch_on_startup():
+    if not IS_WINDOWS:
+        return False
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            winreg.QueryValueEx(key, APP_NAME)
+        return True
+    except OSError:
+        return False
+
+
+def set_launch_on_startup(enabled):
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+        if enabled:
+            winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, startup_command())
+        else:
+            try:
+                winreg.DeleteValue(key, APP_NAME)
+            except FileNotFoundError:
+                pass
+
+
+def refresh_launch_on_startup():
+    """If startup is on, point it at wherever the app is now (e.g. after the exe was moved)."""
+    try:
+        if get_launch_on_startup():
+            set_launch_on_startup(True)
+    except OSError as e:
+        log.warning("Couldn't update the startup entry: %s", e)
+
+
 def main():
     if not claim_single_instance():
         return  # the copy that's already running brings its window to the front
-    App().run()
+    refresh_launch_on_startup()
+    App(launched_at_startup=STARTUP_ARG in sys.argv[1:]).run()
 
 
 if __name__ == "__main__":
