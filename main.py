@@ -42,7 +42,7 @@ pd.PAUSE = 0.015
 
 APP_NAME = "AutoWisp"
 WINDOW_TITLE = "AutoWisp"
-APP_VERSION = "1.4.0"  # bump this for each GitHub release (tagged v1.4.0 etc.)
+APP_VERSION = "1.5.0"  # bump this for each GitHub release (tagged v1.5.0 etc.)
 RELEASES_API = "https://api.github.com/repos/irefusetosleep/autowisp_v2/releases/latest"
 RELEASES_PAGE = "https://github.com/irefusetosleep/autowisp_v2/releases"
 
