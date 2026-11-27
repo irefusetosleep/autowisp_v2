@@ -23,7 +23,7 @@ import cv2 as cv
 import mss
 import numpy as np
 import pywinctl
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 from pynput import keyboard
 
 try:
@@ -55,17 +55,60 @@ CAST_OFFSET_Y = 170          # top edge, in pixels below the top of the window's
 CAST_WIDTH = 307             # split into 4 equal slots, one letter each
 CAST_HEIGHT = 190
 BINARIZE_THRESH = 140
-MATCH_THRESHOLD = 0.5
-# A letter after an empty slot (e.g. the last one left on screen) needs a surer match, since
-# there's no letter before it to confirm a cast is showing. Real letters score ~0.8-0.9;
-# letter-sized patches of the game background top out around 0.5.
-GAP_MATCH_THRESHOLD = 0.7
-# A real letter is a bright shape on a darker backdrop, so almost none of the pixels around its
-# strokes are lit (measured 0%). Bright fog, sky and edges that happen to score like a letter
-# light up 25%+ of them, so a match lighting more than this share is rejected.
+SLOTS = 4                    # a ritual cast shows 1-4 letters
+
+# --- Reading the letters ---
+# The cast shows the player's own 4 cast keys, so each letter on screen only has to be told
+# apart from those 4. It's compared with each key drawn in a spread of fonts (and the game's own
+# letter shapes where we have them). Scores are shape similarity, 1.0 = identical.
+DEFAULT_CAST_KEYS = ("c", "v", "x", "z")
+# Keys a cast can be bound to: anything typed without Shift whose symbol is letter-sized on
+# screen. (Small marks like , . ' - would be indistinguishable from specks in the scenery.)
+CAST_KEY_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789[]"
+# Learned shapes are saved as <name>_<n>.png; [ and ] have special meanings in file searches
+KEY_FILE_NAMES = {"[": "lbracket", "]": "rbracket"}
+GLYPH_SIZE = 32              # letters are compared at this size (px square)
+RATIO_PENALTY = 0.5          # how much a different width/height ratio counts against a match
+FONT_FOLDERS = ("C:/Windows/Fonts", "/System/Library/Fonts/Supplemental", "/Library/Fonts",
+                "/usr/share/fonts/truetype/dejavu")
+# Serif faces only, like the game's cast font. (Sans-serif I and l are plain bars, which any
+# thin bright line in the scenery would match.)
+REFERENCE_FONTS = ("georgiab.ttf", "georgia.ttf", "timesbd.ttf", "times.ttf", "palab.ttf", "pala.ttf",
+                   "cambriab.ttf", "cambriab.ttc", "constan.ttf", "constanb.ttf", "sylfaen.ttf",
+                   "Georgia Bold.ttf", "Georgia.ttf", "Times New Roman Bold.ttf", "Times New Roman.ttf",
+                   "DejaVuSerif-Bold.ttf", "DejaVuSerif.ttf")
+# A letter on screen is a bright shape of about this size (real cast letters are ~19-24 x 23-25px;
+# wide letters like M and W reach ~40px in serif faces, Q/J tails add up to ~10px of height, and
+# the game's [ and ] are 7 x 24px)
+GLYPH_MIN_HEIGHT, GLYPH_MAX_HEIGHT = 20, 34
+GLYPH_MIN_WIDTH, GLYPH_MAX_WIDTH = 5, 42
+# ...and one of two colours: near-white (measured ~225,230,237 BGR, channels within ~12 of each
+# other) or the cast's purple (~227,139,151 BGR: ~88 more blue than green). Bluish fog, sky and
+# scenery that happen to be letter-shaped are neither.
+LETTER_MIN_BRIGHTNESS = 190  # brightest channel, averaged over the letter
+WHITE_MAX_SPREAD = 25        # max difference between channels for "white"
+GLYPH_MIN_AREA = 25
+GLYPH_MARGIN = 4             # px around a letter checked for being dark
+MATCH_THRESHOLD = 0.75       # a full cast of 4: each letter, against the fonts or game shapes
+MIN_LEAD = 0.02              # how far ahead of the next-best key the best one must be
+# A read of fewer than 4 letters (a letter left on its own, or a cast still fading in) has no
+# full cast around it to confirm it, and is where false positives come from. So each letter
+# must closely match the game's own shape of that key: real letters score 0.96-0.98 against it.
+GAME_MATCH_THRESHOLD = 0.9
+# Learning the game's shapes for a new key: only from a full cast, and only letters that are a
+# sure match (real ones score 0.87+ against the fonts; letters that aren't the player's keys
+# ≤0.83) and clearly ahead of the other keys (similar pairs like E/F wait for a clearer read)
+LEARN_THRESHOLD = 0.86
+LEARN_MIN_LEAD = 0.05
+LEARN_SKIP_IF_MATCHES = 0.95  # already have a shape this close: don't store another
+LEARN_MAX_PER_KEY = 4         # e.g. white and purple versions
+# A real letter is a bright shape on a darker backdrop, so almost none of the pixels around it
+# are lit (measured 0%). Bright fog, sky and edges that happen to look letter-shaped light up
+# 25%+ of them, so a shape lighting more than this share is rejected.
 MAX_BACKGROUND_LIT = 0.12
-PURPLE_BLUE_OVER_GREEN = 40  # purple letters measure ~88 more blue than green, white ones ~0
-SLOTS = 4                    # a ritual cast shows 1-4 letters# If the exact same letters are still showing right after typing them, the game may just not have
+# Purple letters measure ~88 more blue than green, white ones ~0, bluish fog/sky up to ~50
+PURPLE_BLUE_OVER_GREEN = 60
+# If the exact same letters are still showing right after typing them, the game may just not have
 # updated yet, so wait this long before assuming the keys didn't register and typing them again
 REPEAT_GUARD_SECONDS = 0.2
 RESCAN_DELAY = 0.02          # when a scan finds under 4 letters, look again this soon (fading in)
@@ -90,7 +133,6 @@ HUMAN_HESITATE_CHANCE = 0.04                    # occasionally pause a little lo
 HUMAN_HESITATE = (0.04, 0.10)
 TEMPLATE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 
-MACRO_KEYS = {"c", "v", "x", "z"}  # keys the macro presses itself
 # Older settings files stored Tk key names; map them to pynput names
 KEY_ALIASES = {
     "escape": "esc",
@@ -215,6 +257,9 @@ class Settings:
             self.volume = 60
         self.tray = self._bool(section, "minimize_to_tray", False)
         self.start_minimized = self._bool(section, "start_minimized", False)
+        keys = [c for c in section.get("cast_keys", "").strip().lower() if c in CAST_KEY_CHARS]
+        valid = len(keys) == SLOTS and len(set(keys)) == SLOTS
+        self.cast_keys = keys if valid else list(DEFAULT_CAST_KEYS)
         self.delay_mode = section.get("delay_mode", "fixed").strip().lower()
         if self.delay_mode not in ("fixed", "ping"):
             self.delay_mode = "fixed"
@@ -251,6 +296,7 @@ class Settings:
         section["volume"] = str(self.volume)
         section["minimize_to_tray"] = "true" if self.tray else "false"
         section["start_minimized"] = "true" if self.start_minimized else "false"
+        section["cast_keys"] = "".join(self.cast_keys)
         section["delay_mode"] = self.delay_mode
         section["ping_ms"] = str(self.ping_ms)
         section["overlay"] = "true" if self.overlay else "false"
@@ -329,13 +375,19 @@ class Letter(NamedTuple):
     purple: bool  # purple letters are the random ones a player has to read
 
 
-def is_purple(pixels):
-    """Normal letters are near-white; purple ones have far more blue than green.
-    `pixels` are BGR(A) colours from where the letter was matched."""
+def letter_colour(pixels):
+    """'white' or 'purple' if these pixels are a cast letter's colour, otherwise None.
+    `pixels` are BGR(A) colours from the letter's shape."""
     if len(pixels) < 10:
-        return False
-    blue, green = pixels[:, 0].astype(float).mean(), pixels[:, 1].astype(float).mean()
-    return blue - green > PURPLE_BLUE_OVER_GREEN
+        return None
+    mean = pixels[:, :3].astype(float).mean(axis=0)
+    if mean.max() < LETTER_MIN_BRIGHTNESS:
+        return None
+    if mean[0] - mean[1] > PURPLE_BLUE_OVER_GREEN:
+        return "purple"
+    if mean.max() - mean.min() <= WHITE_MAX_SPREAD:
+        return "white"
+    return None
 
 
 def window_frame(window):
@@ -347,21 +399,167 @@ def window_frame(window):
         return window.left, window.top, window.width, window.height
 
 
+def glyph_vector(binary):
+    """A letter shape as a fixed-size, unit-length vector (tight crop, fitted into a square
+    keeping its proportions, lightly blurred), plus its width/height ratio."""
+    ys, xs = np.nonzero(binary)
+    if len(xs) == 0:
+        return None, 1.0
+    crop = binary[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    h, w = crop.shape
+    scale = (GLYPH_SIZE - 2) / max(h, w)
+    crop = cv.resize(crop, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv.INTER_AREA)
+    square = np.zeros((GLYPH_SIZE, GLYPH_SIZE), np.float32)
+    y0, x0 = (GLYPH_SIZE - crop.shape[0]) // 2, (GLYPH_SIZE - crop.shape[1]) // 2
+    square[y0:y0 + crop.shape[0], x0:x0 + crop.shape[1]] = crop / 255.0
+    vector = cv.GaussianBlur(square, (3, 3), 0).ravel()
+    norm = np.linalg.norm(vector)
+    return (vector / norm if norm else None), w / h
+
+
+def render_letter(letter, font):
+    """A letter drawn white on black in one font, thresholded like a screen capture."""
+    image = Image.new("L", (64, 64), 0)
+    ImageDraw.Draw(image).text((12, 6), letter, font=font, fill=255)
+    return (np.asarray(image) > BINARIZE_THRESH).astype(np.uint8) * 255
+
+
+def reference_fonts():
+    """Fonts to draw reference letters in: a spread of serif faces, so a letter is recognised
+    whatever the exact shape of the game's font."""
+    fonts = []
+    for folder in FONT_FOLDERS:
+        for name in REFERENCE_FONTS:
+            path = Path(folder) / name
+            if path.exists():
+                try:
+                    fonts.append(ImageFont.truetype(str(path), 30))
+                except OSError:
+                    pass
+    if not fonts:
+        try:
+            fonts.append(ImageFont.load_default(size=30))
+        except TypeError:  # older Pillow without scalable default font
+            pass
+    return fonts
+
+
 class Detector:
-    def __init__(self, template_folder: Path):
-        self.templates = []  # (letter, binary image) at the reference resolution
-        for path in sorted(template_folder.iterdir()):
-            if not (path.is_file() and path.suffix.lower() in TEMPLATE_EXTENSIONS):
-                continue
-            image = cv.imread(str(path), cv.IMREAD_GRAYSCALE)
-            if image is None:
-                log.warning("Template load failed: %s", path)
-                continue
-            letter = path.stem.replace("_purple", "").lower()
-            self.templates.append((letter, image))
-        if not self.templates:
-            raise FileNotFoundError(f"No letter templates found in {template_folder}")
+    """Reads the cast's letters. The player's 4 cast keys are the only letters that can appear,
+    so each letter on screen is identified by which of those 4 it looks most like.
+
+    Two kinds of reference shapes are used: each key drawn in a spread of fonts (works for any
+    letter straight away), and the game's own letter shapes, which match far more closely. The
+    game shapes for C/V/X/Z ship with the app; for other keys they're learned from the first
+    casts that are read with confidence, and saved so they're there next time."""
+
+    def __init__(self, template_folder: Path, keys, learned_folder: Path = None):
+        self.builtin_shapes = self._load_shapes(template_folder)
+        self.learned_folder = learned_folder
+        self.learned_shapes = self._load_shapes(learned_folder) if learned_folder else {}
+        self.fonts = reference_fonts()
+        self._font_cache = {}  # key -> font reference vectors (drawing them is the slow part)
+        self._lock = threading.Lock()
+        log.info("Letter references: %d fonts; game shapes for %s; learned for %s", len(self.fonts),
+                 " ".join(sorted(self.builtin_shapes)).upper() or "none",
+                 " ".join(sorted(self.learned_shapes)).upper() or "none")
         self._local = threading.local()
+        self.set_keys(keys)
+
+    @staticmethod
+    def _load_shapes(folder):
+        shapes = {}
+        if folder is None or not folder.is_dir():
+            return shapes
+        for path in sorted(folder.iterdir()):
+            if path.is_file() and path.suffix.lower() in TEMPLATE_EXTENSIONS:
+                image = cv.imread(str(path), cv.IMREAD_GRAYSCALE)
+                if image is not None:
+                    name = path.stem.split("_")[0].lower()
+                    letter = {v: k for k, v in KEY_FILE_NAMES.items()}.get(name, name)
+                    shapes.setdefault(letter, []).append(image)
+        return shapes
+
+    def set_keys(self, keys):
+        """Build the reference shapes for the player's cast keys. Learned shapes for letters
+        that are no longer cast keys are forgotten."""
+        keys = [k.lower() for k in keys]
+        with self._lock:
+            for letter in list(self.learned_shapes):
+                if letter not in keys:
+                    del self.learned_shapes[letter]
+                    self._delete_learned_files(letter)
+            vectors, ratios, owners, is_game = [], [], [], []
+            for index, key in enumerate(keys):
+                if key not in self._font_cache:
+                    self._font_cache[key] = [glyph_vector(render_letter(key.upper(), font))
+                                             for font in self.fonts]
+                refs = [(v, r, False) for v, r in self._font_cache[key]]
+                game = self.builtin_shapes.get(key, []) + self.learned_shapes.get(key, [])
+                refs += [(*glyph_vector(shape), True) for shape in game]
+                for vector, ratio, game_shape in refs:
+                    if vector is not None:
+                        vectors.append(vector)
+                        ratios.append(ratio)
+                        owners.append(index)
+                        is_game.append(game_shape)
+            if not vectors:
+                raise RuntimeError("Couldn't build any letter references")
+            # Swap in all at once, so the macro thread never sees a half-built set
+            self._refs = (keys, np.array(vectors), np.log(np.array(ratios)), np.array(owners),
+                          np.array(is_game))
+
+    def classify(self, glyph):
+        """(key, score, lead over the next-best key, score against the game's own shapes of
+        that key, or 0 if we have none yet) for a letter shape."""
+        keys, vectors, log_ratios, owners, is_game = self._refs
+        vector, ratio = glyph_vector(glyph)
+        if vector is None:
+            return None, 0.0, 0.0, 0.0
+        scores = vectors @ vector - RATIO_PENALTY * np.abs(log_ratios - np.log(ratio))
+        per_key = np.full(len(keys), -9.0)
+        np.maximum.at(per_key, owners, scores)
+        order = np.argsort(per_key)[::-1]
+        best = order[0]
+        lead = per_key[best] - per_key[order[1]] if len(keys) > 1 else 1.0
+        game_scores = scores[(owners == best) & is_game]
+        game_score = float(game_scores.max()) if len(game_scores) else 0.0
+        return keys[best], float(per_key[best]), float(lead), game_score
+
+    def _learn(self, found):
+        """Remember the game's shapes from a confidently read full cast: (key, glyph, game_score)
+        for each letter. Only shapes unlike any we already have are kept."""
+        changed = False
+        with self._lock:
+            for key, glyph, game_score in found:
+                have = self.builtin_shapes.get(key, []) + self.learned_shapes.get(key, [])
+                if game_score >= LEARN_SKIP_IF_MATCHES or len(self.learned_shapes.get(key, [])) >= LEARN_MAX_PER_KEY:
+                    continue
+                self.learned_shapes.setdefault(key, []).append(glyph.copy())
+                changed = True
+                log.info("Learned the game's %s (%d shape%s now)", key.upper(), len(have) + 1,
+                         "" if not have else "s")
+                if self.learned_folder is not None:
+                    try:
+                        self.learned_folder.mkdir(parents=True, exist_ok=True)
+                        n = len(self.learned_shapes[key])
+                        name = KEY_FILE_NAMES.get(key, key)
+                        cv.imwrite(str(self.learned_folder / f"{name}_{n}.png"), glyph)
+                    except Exception:
+                        log.exception("Couldn't save a learned letter shape")
+        if changed:
+            self.set_keys(self._refs[0])
+
+    def _delete_learned_files(self, letter):
+        if self.learned_folder is None or not self.learned_folder.is_dir():
+            return
+        name = KEY_FILE_NAMES.get(letter, letter)
+        for path in self.learned_folder.iterdir():
+            if path.name.lower().startswith(f"{name}_") and path.suffix.lower() == ".png":
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
     def _mss(self):
         # mss isn't thread-safe, so each thread gets its own instance
@@ -387,50 +585,83 @@ class Detector:
         """Letters from left to right. Empty slots are skipped, so a letter left on its own in a
         later slot (after the ones before it were typed) is still found."""
         slot_width = image.shape[1] // SLOTS
-        letters, scores = [], []
-        after_gap = False
+        letters, details = [], []  # details: (glyph, score, lead, game score) per letter
         for i in range(SLOTS):
             x0 = i * slot_width
             slot = image[:, x0:x0 + slot_width]
-            best = {}  # letter -> (score, location, template)
-            for letter, template in self.templates:
-                if template.shape[0] > slot.shape[0] or template.shape[1] > slot.shape[1]:
-                    continue
-                result = cv.matchTemplate(slot, template, cv.TM_CCOEFF_NORMED)
-                _, score, _, loc = cv.minMaxLoc(result)
-                # Normal and purple templates share a letter, so keep the better score
-                if score > best.get(letter, (-1.0,))[0]:
-                    best[letter] = (score, loc, template)
-            if not best:
-                after_gap = True
+            found = self._find_glyph(slot)
+            if found is None:
                 continue
-            key = max(best, key=lambda k: best[k][0])
-            score, (lx, ly), template = best[key]
-            log.debug("Slot %d scores: %s", i + 1,
-                      ", ".join(f"{k}={v[0]:.2f}" for k, v in sorted(best.items())))
-            if score < (GAP_MATCH_THRESHOLD if after_gap else MATCH_THRESHOLD):
-                after_gap = True
-                continue
-            th, tw = template.shape[:2]
-            patch = slot[ly:ly + th, lx:lx + tw]
-            background_lit = float((patch[template == 0] > 0).mean())
+            glyph_mask, (gx, gy, gw, gh), background_lit = found
             if background_lit > MAX_BACKGROUND_LIT:
-                log.debug("Slot %d: rejected %s (%.2f) - %.0f%% of its background is lit",
-                          i + 1, key, score, background_lit * 100)
-                after_gap = True
+                log.debug("Slot %d: rejected a shape - %.0f%% of its surroundings are lit",
+                          i + 1, background_lit * 100)
                 continue
+            glyph = glyph_mask[gy:gy + gh, gx:gx + gw]
             purple = False
             if color is not None:
-                pixels = color[ly:ly + th, x0 + lx:x0 + lx + tw][template > 0]
-                purple = is_purple(pixels)
+                kind = letter_colour(color[gy:gy + gh, x0 + gx:x0 + gx + gw][glyph > 0])
+                if kind is None:
+                    log.debug("Slot %d: rejected a shape - not a cast letter colour", i + 1)
+                    continue
+                purple = kind == "purple"
+            key, score, lead, game_score = self.classify(glyph)
+            log.debug("Slot %d: looks like %s (%.2f, lead %.2f, game shape %.2f)",
+                      i + 1, key, score, lead, game_score)
+            if score < MATCH_THRESHOLD or lead < MIN_LEAD:
+                continue
             letters.append(Letter(key, purple))
-            scores.append(score)
+            details.append((glyph, score, lead, game_score))
         if len(letters) < SLOTS:
             # Fewer than 4 letters is where false positives come from (a full cast is 4), so
-            # each of these must be a confident match. A letter still fading in that misses
-            # this is simply picked up on the next scan.
-            letters = [l for l, s in zip(letters, scores) if s >= GAP_MATCH_THRESHOLD]
+            # each one must closely match the game's own shape of that letter. Letters still
+            # fading in are picked up on the next scan.
+            kept = [(l, d) for l, d in zip(letters, details) if d[3] >= GAME_MATCH_THRESHOLD]
+            return [l for l, _ in kept]
+        # A full cast: learn the game's shape of each letter that was read with real certainty
+        sure = [(l.key, d[0], d[3]) for l, d in zip(letters, details)
+                if d[1] >= LEARN_THRESHOLD and d[2] >= LEARN_MIN_LEAD]
+        if sure:
+            self._learn(sure)
         return letters
+
+    @staticmethod
+    def _find_glyph(slot):
+        """The letter-sized bright shape in a slot, as (mask of just that shape, its box,
+        share of lit pixels around it), or None. Pieces of one letter that the threshold split
+        apart (thin strokes of purple letters) are joined back together."""
+        count, labels, stats, _ = cv.connectedComponentsWithStats(slot, connectivity=8)
+        candidates = [k for k in range(1, count)
+                      if stats[k, cv.CC_STAT_AREA] >= GLYPH_MIN_AREA
+                      and GLYPH_MIN_HEIGHT <= stats[k, cv.CC_STAT_HEIGHT] <= GLYPH_MAX_HEIGHT
+                      and stats[k, cv.CC_STAT_WIDTH] <= GLYPH_MAX_WIDTH]
+        if not candidates:
+            return None
+        main_part = max(candidates, key=lambda k: stats[k, cv.CC_STAT_AREA])
+        x, y, w, h = stats[main_part, :4]
+        x0, y0, x1, y1 = x, y, x + w, y + h
+        parts = [main_part]
+        for k in range(1, count):
+            if k == main_part or stats[k, cv.CC_STAT_AREA] < 3:
+                continue
+            kx, ky, kw, kh = stats[k, :4]
+            if kx <= x1 + 2 and kx + kw >= x0 - 2 and ky <= y1 + 2 and ky + kh >= y0 - 2:
+                nx0, ny0, nx1, ny1 = min(x0, kx), min(y0, ky), max(x1, kx + kw), max(y1, ky + kh)
+                if ny1 - ny0 <= GLYPH_MAX_HEIGHT and nx1 - nx0 <= GLYPH_MAX_WIDTH:
+                    x0, y0, x1, y1 = nx0, ny0, nx1, ny1
+                    parts.append(k)
+        if x1 - x0 < GLYPH_MIN_WIDTH:
+            return None  # a thin line, not a letter (even a serif I is wider)
+        mask = np.isin(labels, parts).astype(np.uint8) * 255
+        # How much is lit around the letter that isn't the letter: real cast letters sit on a
+        # darker backdrop, bright scenery and text don't
+        m = GLYPH_MARGIN
+        ax0, ay0 = max(0, x0 - m), max(0, y0 - m)
+        ax1, ay1 = min(slot.shape[1], x1 + m), min(slot.shape[0], y1 + m)
+        around = (slot[ay0:ay1, ax0:ax1] > 0) & (mask[ay0:ay1, ax0:ax1] == 0)
+        ring_area = (ax1 - ax0) * (ay1 - ay0) - (x1 - x0) * (y1 - y0)
+        background_lit = around.sum() / max(1, ring_area)
+        return mask, (x0, y0, x1 - x0, y1 - y0), float(background_lit)
 
 
 # --- Macro loop ---
@@ -905,6 +1136,7 @@ class App:
 
         self.events = queue.Queue()  # work handed from background threads to the Tk thread
         self.capturing_keybind = False
+        self.capturing_cast_key = None  # which of the 4 cast-key buttons is waiting for a key
         self.update_info = None   # (version, url) once a newer release is found
         self.tray_icon = None
 
@@ -920,7 +1152,8 @@ class App:
             log.debug("Icon load failed: %s", e)  # expected on macOS
 
         try:
-            self.detector = Detector(resource_path("Letters"))
+            self.detector = Detector(resource_path("Letters"), self.settings.cast_keys,
+                                     app_data_dir() / "letter_shapes")
         except Exception as e:
             log.exception("Couldn't load templates")
             self._show_fatal(f"Couldn't load the letter templates.\n\n{e}")
@@ -1099,6 +1332,17 @@ class App:
                                          font=(FONT_MONO, 10, "bold"), padx=10, pady=3,
                                          highlightthickness=1, highlightbackground=BORDER)
         self.keybind_button.pack(side="right")
+
+        row = self._setting_row(settings, "Ritual cast keys")
+        self.cast_key_buttons = []
+        for index in reversed(range(SLOTS)):  # packed right to left
+            button = FlatButton(row, self.settings.cast_keys[index].upper(),
+                                lambda i=index: self.begin_cast_key_capture(i),
+                                bg=SURFACE_HI, fg=ORANGE, hover_bg=BORDER,
+                                font=(FONT_MONO, 10, "bold"), padx=7, pady=3,
+                                highlightthickness=1, highlightbackground=BORDER)
+            button.pack(side="right", padx=(4, 0))
+            self.cast_key_buttons.insert(0, button)
 
         row = self._setting_row(settings, "Delay between keys")
         self.delay_switch = SegmentedSwitch(row, [("fixed", "Fixed"), ("ping", "Ping")],
@@ -1320,7 +1564,10 @@ class App:
         if not messagebox.askyesno("Reset settings", "Put every setting back to its default?",
                                    parent=self.root):
             return
+        self.capturing_keybind = False
+        self.capturing_cast_key = None  # the buttons are rebuilt below
         self.settings.reset()
+        self.detector.set_keys(self.settings.cast_keys)
         set_debug_logging(self.settings.debug)
         if IS_WINDOWS:
             try:
@@ -1443,6 +1690,7 @@ class App:
         self.root.after(50, self._overlay_loop)
 
     def begin_keybind_capture(self):
+        self.end_cast_key_capture()
         self.capturing_keybind = True
         self.keybind_button.config(text="Press a key…", highlightbackground=ORANGE)
         self.detail_label.config(text="Press the new hotkey, or Esc to cancel.", fg=MUTED)
@@ -1451,12 +1699,58 @@ class App:
         self.capturing_keybind = False
         self.keybind_button.config(text=display_key(self.settings.keybind), highlightbackground=BORDER)
 
+    def begin_cast_key_capture(self, index):
+        if self.capturing_keybind:
+            self.end_keybind_capture()
+        self.end_cast_key_capture()
+        self.capturing_cast_key = index
+        self.cast_key_buttons[index].config(text="…", highlightbackground=ORANGE)
+        self.detail_label.config(text="Press the key this cast slot is bound to in Deepwoken, or Esc "
+                                      "to cancel.", fg=MUTED)
+
+    def end_cast_key_capture(self):
+        index, self.capturing_cast_key = self.capturing_cast_key, None
+        if index is not None:
+            self.cast_key_buttons[index].config(text=self.settings.cast_keys[index].upper(),
+                                                highlightbackground=BORDER)
+
+    def set_cast_key(self, index, name):
+        keys = list(self.settings.cast_keys)
+        if name in keys and keys.index(name) != index:
+            # Already one of the other cast keys: swap them, so all 4 stay different
+            other = keys.index(name)
+            keys[other] = keys[index]
+        keys[index] = name
+        self.settings.cast_keys = keys
+        self.settings.save()
+        self.detector.set_keys(keys)
+        for button, key in zip(self.cast_key_buttons, keys):
+            button.config(text=key.upper())
+        log.info("Cast keys set to %s", " ".join(k.upper() for k in keys))
+
     def handle_key(self, name):
+        if self.capturing_cast_key is not None:
+            index = self.capturing_cast_key
+            if name == "esc":
+                self.end_cast_key_capture()
+                self.detail_label.config(text="Cast key unchanged.", fg=MUTED)
+            elif len(name) != 1 or name not in CAST_KEY_CHARS:
+                self.detail_label.config(text="Cast keys can be A-Z, 0-9, [ or ]. Press one of those, or "
+                                              "Esc to cancel.", fg=ERROR)
+            elif name == self.settings.keybind:
+                self.detail_label.config(text=f"{display_key(name)} is your start/stop hotkey. "
+                                              "Pick another key.", fg=ERROR)
+            else:
+                self.end_cast_key_capture()
+                self.set_cast_key(index, name)
+                self.detail_label.config(text="Cast keys: " + " ".join(k.upper() for k in self.settings.cast_keys)
+                                         + ". New letters are learned from your first casts.", fg=MUTED)
+            return
         if self.capturing_keybind:
             if name == "esc":
                 self.end_keybind_capture()
                 self.detail_label.config(text="Hotkey unchanged.", fg=MUTED)
-            elif name in MACRO_KEYS:
+            elif name in self.settings.cast_keys:
                 self.detail_label.config(text=f"{display_key(name)} is typed by the macro. Pick another key.",
                                          fg=ERROR)
             else:
